@@ -21,8 +21,8 @@ local mashShift = {"ctrl", "alt", "shift"}  -- Ctrl + Option + Shift
 -- ============================================
 
 local margin = {
-    outer = 10,      -- 左右两侧边距（距离屏幕边缘）
-    inner = 20,      -- 中间边距（窗口之间的空隙，比outer大一些）
+    outer = 20,      -- 左右两侧边距（距离屏幕边缘）
+    inner = 30,      -- 中间边距（窗口之间的空隙，比outer大一些）
 }
 
 -- 计算屏幕可用区域（扣除边距后的区域）
@@ -190,14 +190,14 @@ hs.hotkey.bind(mash, "up", function()
 end)
 
 -- 下半屏
-hs.hotkey.bind(mash, "down", function()
-    local win = hs.window.focusedWindow()
-    if not win then return end
-    saveWindowState(win)
-    local max = getWinScreen(win)
-    local area = getUsableArea(max)
-    setWinFrame(win, hs.geometry.rect(area.x, area.y + max.h * 0.5, area.w, max.h * 0.5))
-end)
+-- hs.hotkey.bind(mash, "down", function()
+--     local win = hs.window.focusedWindow()
+--     if not win then return end
+--     saveWindowState(win)
+--     local max = getWinScreen(win)
+--     local area = getUsableArea(max)
+--     setWinFrame(win, hs.geometry.rect(area.x, area.y + max.h * 0.5, area.w, max.h * 0.5))
+-- end)
 
 -- 最大化（应用边距）
 hs.hotkey.bind(mash, "return", function()
@@ -680,10 +680,11 @@ local EdgeDock = {
         dragWin = nil,
         dragStartPos = nil,
         dragStartFrame = nil,
+        highlightedSlot = nil,  -- 当前高亮的槽位
     },
     config = {
         maxSlots = 5,       -- 最大槽位数
-        barWidth = 14,      -- 小条宽度
+        barWidth = 10,      -- 小条宽度
         barHeight = 220,     -- 小条高度
         barGap = 20,        -- 小条之间的空隙
         peekWidth = 3,      -- 窗口 peek 出来的宽度
@@ -706,8 +707,9 @@ end
 -- 检查点是否在槽位区域
 function EdgeDock.isPointInSlot(x, y, slotIndex)
     local sx, sy, sw, sh = EdgeDock.getSlotPosition(slotIndex)
-    return x >= sx - 50 and x <= sx + sw + 50  -- 加宽检测区域方便拖拽
-           and y >= sy and y <= sy + sh
+    -- 扩大检测区域方便拖拽（上下左右都扩展）
+    return x >= sx - 80 and x <= sx + sw + 80
+           and y >= sy - 10 and y <= sy + sh + 10
 end
 
 -- 检查点是否在窗口区域内（用于检测鼠标是否离开窗口）
@@ -756,14 +758,14 @@ function EdgeDock.refreshBars()
                 fillColor = {alpha = 0.2, red = 0.3, green = 0.3, blue = 0.3},
                 roundedRectRadii = {xRadius = 4, yRadius = 4},
             })
-            bar:appendElements({
-                type = "text",
-                text = tostring(i),
-                textSize = 11,
-                textColor = {alpha = 0.4, red = 1, green = 1, blue = 1},
-                frame = {x = 0, y = h/2 - 8, w = w, h = 16},
-                textAlignment = "center",
-            })
+            -- bar:appendElements({
+            --     type = "text",
+            --     text = tostring(i),
+            --     textSize = 11,
+            --     textColor = {alpha = 0.4, red = 1, green = 1, blue = 1},
+            --     frame = {x = 0, y = h/2 - 8, w = w, h = 16},
+            --     textAlignment = "center",
+            -- })
         end
         
         bar:show()
@@ -773,6 +775,66 @@ function EdgeDock.refreshBars()
             canvas = bar,
             slotIndex = i,
         })
+    end
+end
+
+-- 高亮小条（拖拽提示）
+function EdgeDock.highlightBar(slotIndex, highlight)
+    local bar = EdgeDock.bars[slotIndex]
+    if not bar or not bar.canvas then return end
+    
+    local slot = EdgeDock.slots[slotIndex]
+    local w, h = EdgeDock.config.barWidth, EdgeDock.config.barHeight
+    
+    -- 清除并重绘
+    bar.canvas:removeElement(1)
+    bar.canvas:removeElement(1)
+    
+    if highlight then
+        -- 高亮状态 - 亮色边框
+        bar.canvas:appendElements({
+            type = "rectangle",
+            action = "fill",
+            fillColor = slot and {alpha = 0.9, red = 0.3, green = 0.7, blue = 1.0} 
+                        or {alpha = 0.6, red = 0.5, green = 0.5, blue = 0.5},
+            roundedRectRadii = {xRadius = 4, yRadius = 4},
+        })
+    else
+        -- 正常状态
+        if slot then
+            bar.canvas:appendElements({
+                type = "rectangle",
+                action = "fill",
+                fillColor = {alpha = 0.5, red = 1, green = 1, blue = 1},
+                roundedRectRadii = {xRadius = 4, yRadius = 4},
+            })
+        else
+            bar.canvas:appendElements({
+                type = "rectangle",
+                action = "fill",
+                fillColor = {alpha = 0.2, red = 0.3, green = 0.3, blue = 0.3},
+                roundedRectRadii = {xRadius = 4, yRadius = 4},
+            })
+        end
+    end
+    
+    -- 文字
+    bar.canvas:appendElements({
+        type = "text",
+        text = slot and string.upper(string.sub(slot.appName, 1, 1)) or tostring(slotIndex),
+        textSize = 14,
+        textColor = highlight and {alpha = 1, red = 1, green = 1, blue = 1}
+                            or (slot and {alpha = 1, red = 0, green = 0, blue = 0} 
+                                or {alpha = 0.4, red = 1, green = 1, blue = 1}),
+        frame = {x = 0, y = h/2 - 10, w = w, h = 20},
+        textAlignment = "center",
+    })
+end
+
+-- 清除所有高亮
+function EdgeDock.clearAllHighlights()
+    for i = 1, EdgeDock.config.maxSlots do
+        EdgeDock.highlightBar(i, false)
     end
 end
 
@@ -797,8 +859,22 @@ function EdgeDock.dockWindow(win, slotIndex)
     local screen = win:screen():frame()
     local frame = win:frame()
     
-    -- 获取槽位位置，窗口 y 坐标与槽位对齐
+    -- 获取槽位位置
     local sx, sy, sw, sh = EdgeDock.getSlotPosition(slotIndex)
+    
+    -- 计算窗口在槽位区域内的垂直居中位置
+    local winY = sy + (sh - frame.h) / 2
+    
+    -- 确保窗口不会超出屏幕顶部和底部
+    local screen = win:screen():frame()
+    if winY < screen.y then
+        winY = screen.y
+    end
+    if winY + frame.h > screen.y + screen.h then
+        winY = screen.y + screen.h - frame.h
+    end
+    
+    print(string.format("[EdgeDock] 槽位%d: y=%.0f, h=%.0f, 窗口高=%.0f, winY=%.0f", slotIndex, sy, sh, frame.h, winY))
     
     EdgeDock.slots[slotIndex] = {
         win = win,
@@ -807,20 +883,21 @@ function EdgeDock.dockWindow(win, slotIndex)
         appName = app and app:name() or "?",
         isShowing = false,
         hideTimer = nil,
-        slotY = sy,  -- 记录槽位的 Y 坐标
-        slotHeight = sh,
+        slotY = sy,         -- 槽位顶部 Y
+        slotHeight = sh,    -- 槽位高度
+        winY = winY,        -- 窗口实际显示的 Y（垂直居中）
     }
     
-    -- 隐藏到屏幕外（只留 peekWidth），y 坐标与槽位对齐
+    -- 隐藏到屏幕外（只留 peekWidth），y 坐标垂直居中于槽位
     local hideX = screen.x + screen.w - EdgeDock.config.peekWidth
-    setWinFrame(win, hs.geometry.rect(hideX, sy, frame.w, frame.h))
+    setWinFrame(win, hs.geometry.rect(hideX, winY, frame.w, frame.h))
     
     EdgeDock.refreshBars()
     notify("Edge Dock", "已停靠到槽位 " .. slotIndex)
     return true
 end
 
--- 显示窗口（滑出到右边，保持大小，y 与槽位对齐）
+-- 显示窗口（滑出到右边，保持大小，在槽位内垂直居中）
 function EdgeDock.peekWindow(slotIndex)
     local slot = EdgeDock.slots[slotIndex]
     if not slot then return end
@@ -831,6 +908,8 @@ function EdgeDock.peekWindow(slotIndex)
         EdgeDock.refreshBars()
         return
     end
+    
+    print(string.format("[EdgeDock] 显示槽位%d, winY=%.0f", slotIndex, slot.winY))
     
     -- 先隐藏其他所有正在显示的窗口（单选模式）
     for i = 1, EdgeDock.config.maxSlots do
@@ -855,14 +934,23 @@ function EdgeDock.peekWindow(slotIndex)
     
     if not slot.isShowing then
         local screen = win:screen():frame()
-        -- 靠右显示，保持大小不变，y 坐标与槽位对齐
+        -- 靠右显示，保持大小不变，y 坐标垂直居中于槽位
         local showX = screen.x + screen.w - win:frame().w
         
-        setWinFrame(win, hs.geometry.rect(showX, slot.slotY, win:frame().w, win:frame().h))
+        setWinFrame(win, hs.geometry.rect(showX, slot.winY, win:frame().w, win:frame().h))
         slot.isShowing = true
         
-        -- 将窗口置顶（最前面）
+        -- 将窗口置顶并激活（最前面）
+        win:unminimize()  -- 确保不是最小化状态
         win:raise()
+        win:focus()
+        -- 稍微延迟再次确保置顶
+        hs.timer.doAfter(0.05, function()
+            if win and win:isStandard() then
+                win:raise()
+                win:focus()
+            end
+        end)
     end
 end
 
@@ -882,7 +970,7 @@ function EdgeDock.hideWindow(slotIndex)
     local frame = win:frame()
     local hideX = screen.x + screen.w - EdgeDock.config.peekWidth
     
-    setWinFrame(win, hs.geometry.rect(hideX, slot.slotY, frame.w, frame.h))
+    setWinFrame(win, hs.geometry.rect(hideX, slot.winY, frame.w, frame.h))
     slot.isShowing = false
 end
 
@@ -910,100 +998,51 @@ function EdgeDock.undockWindow(slotIndex, focus)
     end
 end
 
--- 鼠标事件监听（拖拽检测 + 悬停检测）
-EdgeDock.mouseEventTap = hs.eventtap.new({
-    hs.eventtap.event.types.leftMouseDown,
-    hs.eventtap.event.types.leftMouseDragged,
-    hs.eventtap.event.types.leftMouseUp,
-    hs.eventtap.event.types.mouseMoved,
-}, function(e)
-    local eventType = e:getType()
+-- 鼠标移动监听（仅用于悬停检测，不拦截事件）
+EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, function(e)
     local mousePos = e:location()
     
-    -- 鼠标移动 - 检测悬停槽位 和 窗口离开检测
-    if eventType == hs.eventtap.event.types.mouseMoved then
-        for i = 1, EdgeDock.config.maxSlots do
-            local slot = EdgeDock.slots[i]
-            if not slot then goto continue end
+    -- 悬停检测
+    for i = 1, EdgeDock.config.maxSlots do
+        local slot = EdgeDock.slots[i]
+        if not slot then goto continue end
+        
+        local sx, sy, sw, sh = EdgeDock.getSlotPosition(i)
+        local inSlotArea = mousePos.x >= sx - 10 and mousePos.x <= sx + sw + 10
+                          and mousePos.y >= sy and mousePos.y <= sy + sh
+        
+        -- 检测是否在槽位区域 - 显示窗口
+        if inSlotArea and not slot.isShowing then
+            EdgeDock.peekWindow(i)
+        end
+        
+        -- 检测是否离开窗口区域 - 启动隐藏计时器
+        if slot.isShowing then
+            local inWindow = EdgeDock.isPointInWindow(mousePos.x, mousePos.y, slot.win)
+            local inSlot = mousePos.x >= sx and mousePos.x <= sx + sw + 5
+                          and mousePos.y >= sy and mousePos.y <= sy + sh
             
-            local sx, sy, sw, sh = EdgeDock.getSlotPosition(i)
-            local inSlotArea = mousePos.x >= sx - 10 and mousePos.x <= sx + sw + 10
-                              and mousePos.y >= sy and mousePos.y <= sy + sh
-            
-            -- 检测是否在槽位区域 - 显示窗口
-            if inSlotArea and not slot.isShowing then
-                EdgeDock.peekWindow(i)
-            end
-            
-            -- 检测是否离开窗口区域 - 启动隐藏计时器
-            if slot.isShowing then
-                local inWindow = EdgeDock.isPointInWindow(mousePos.x, mousePos.y, slot.win)
-                local inSlot = mousePos.x >= sx and mousePos.x <= sx + sw + 5
-                              and mousePos.y >= sy and mousePos.y <= sy + sh
-                
-                -- 既不在窗口内，也不在槽位上
-                if not inWindow and not inSlot then
-                    if not slot.hideTimer then
-                        slot.hideTimer = hs.timer.doAfter(EdgeDock.config.hideDelay, function()
-                            EdgeDock.hideWindow(i)
-                            slot.hideTimer = nil
-                        end)
-                    end
-                else
-                    -- 还在窗口或槽位上，取消隐藏计时器
-                    if slot.hideTimer then
-                        slot.hideTimer:stop()
+            -- 既不在窗口内，也不在槽位上
+            if not inWindow and not inSlot then
+                if not slot.hideTimer then
+                    slot.hideTimer = hs.timer.doAfter(EdgeDock.config.hideDelay, function()
+                        EdgeDock.hideWindow(i)
                         slot.hideTimer = nil
-                    end
+                    end)
+                end
+            else
+                -- 还在窗口或槽位上，取消隐藏计时器
+                if slot.hideTimer then
+                    slot.hideTimer:stop()
+                    slot.hideTimer = nil
                 end
             end
-            
-            ::continue::
         end
+        
+        ::continue::
     end
     
-    -- 鼠标按下 - 开始检测拖拽
-    if eventType == hs.eventtap.event.types.leftMouseDown then
-        local win = hs.window.frontmostWindow()
-        if win and win:isStandard() then
-            local frame = win:frame()
-            -- 检查是否点在窗口标题栏区域
-            if mousePos.y >= frame.y and mousePos.y <= frame.y + 25 
-               and mousePos.x >= frame.x and mousePos.x <= frame.x + frame.w then
-                EdgeDock.dragState.isDragging = true
-                EdgeDock.dragState.dragWin = win
-                EdgeDock.dragState.dragStartPos = mousePos
-                EdgeDock.dragState.dragStartFrame = frame
-            end
-        end
-    end
-    
-    -- 鼠标释放 - 结束拖拽
-    if eventType == hs.eventtap.event.types.leftMouseUp then
-        if EdgeDock.dragState.isDragging and EdgeDock.dragState.dragWin then
-            local startPos = EdgeDock.dragState.dragStartPos
-            local movedDist = math.abs(mousePos.x - startPos.x) + math.abs(mousePos.y - startPos.y)
-            
-            if movedDist > EdgeDock.config.dragThreshold then
-                -- 检查是否释放在槽位上
-                for i = 1, EdgeDock.config.maxSlots do
-                    if EdgeDock.isPointInSlot(mousePos.x, mousePos.y, i) then
-                        EdgeDock.dockWindow(EdgeDock.dragState.dragWin, i)
-                        break
-                    end
-                end
-            end
-            
-            EdgeDock.dragState = {
-                isDragging = false,
-                dragWin = nil,
-                dragStartPos = nil,
-                dragStartFrame = nil,
-            }
-        end
-    end
-    
-    return false
+    return false  -- 不拦截事件
 end)
 
 -- 应用关闭检测
@@ -1028,10 +1067,33 @@ EdgeDock.screenWatcher = hs.screen.watcher.new(function()
     end)
 end)
 
+-- 恢复所有可能被之前脚本实例藏起来的窗口
+function EdgeDock.recoverHiddenWindows()
+    local screen = hs.screen.mainScreen():frame()
+    local rightEdge = screen.x + screen.w
+    
+    for _, win in ipairs(hs.window.allWindows()) do
+        if win:isStandard() then
+            local frame = win:frame()
+            -- 如果窗口在屏幕右侧外（被藏起来了），把它拉回来
+            if frame.x >= rightEdge - 10 and frame.x <= rightEdge + 50 then
+                -- 窗口被藏在右边，恢复到屏幕内（居中）
+                local newX = screen.x + (screen.w - frame.w) / 2
+                local newY = screen.y + (screen.h - frame.h) / 2
+                setWinFrame(win, hs.geometry.rect(newX, newY, frame.w, frame.h))
+                print("[EdgeDock] 恢复窗口: " .. (win:application():name() or "Unknown"))
+            end
+        end
+    end
+end
+
 -- 启动
 function EdgeDock.start()
+    -- 先恢复可能被之前实例藏起来的窗口
+    EdgeDock.recoverHiddenWindows()
+    
     EdgeDock.refreshBars()
-    EdgeDock.mouseEventTap:start()
+    EdgeDock.mouseWatcher:start()
     EdgeDock.appWatcher:start()
     EdgeDock.screenWatcher:start()
 end
@@ -1043,20 +1105,20 @@ function EdgeDock.stop()
             EdgeDock.undockWindow(i)
         end
     end
-    EdgeDock.mouseEventTap:stop()
+    EdgeDock.mouseWatcher:stop()
     EdgeDock.appWatcher:stop()
     EdgeDock.screenWatcher:stop()
 end
 
--- 快捷键：停靠到槽位 1-5
+-- 快捷键：停靠到槽位 1-5 (Ctrl+Opt+数字)
 for i = 1, 5 do
-    hs.hotkey.bind(mashShift, tostring(i), function()
+    hs.hotkey.bind(mash, tostring(i), function()
         local win = hs.window.focusedWindow()
         EdgeDock.dockWindow(win, i)
     end)
 end
 
--- 快捷键：恢复槽位 1-5
+-- 快捷键：恢复槽位 1-5 (Ctrl+Opt+Cmd+数字)
 for i = 1, 5 do
     hs.hotkey.bind({"ctrl", "alt", "cmd"}, tostring(i), function()
         EdgeDock.undockWindow(i)
