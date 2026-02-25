@@ -55,6 +55,9 @@ end
 -- 存储还原信息（每个窗口）
 local windowHistory = {}
 
+-- 循环状态记录：每个窗口的左右半屏循环状态
+local cycleState = {}
+
 -- 保存窗口原始状态
 function saveWindowState(win)
     if not win then return end
@@ -71,25 +74,79 @@ function restoreWindow(win)
     if id and windowHistory[id] then
         setWinFrame(win, windowHistory[id])
         windowHistory[id] = nil
+        cycleState[id] = nil  -- 清除循环状态
     end
 end
 
--- 左半屏
+-- 辅助函数：检查值是否在范围内
+local function approx(a, b, tolerance)
+    tolerance = tolerance or 10
+    return math.abs(a - b) < tolerance
+end
+
+-- 左半屏循环：只有已经在左半屏位置时才循环
 hs.hotkey.bind(mash, "left", function()
     local win = hs.window.focusedWindow()
     if not win then return end
     saveWindowState(win)
+    
+    local id = win:id()
     local max = getWinScreen(win)
-    setWinFrame(win, hs.geometry.rect(max.x, max.y, max.w * 0.5, max.h))
+    local frame = win:frame()
+    
+    -- 检查是否已经在左侧且宽度是半屏系列（0.5, 2/3, 1/3）
+    local isLeftSide = approx(frame.x, max.x, 5)
+    local isHalfWidth = approx(frame.w, max.w * 0.5, 20) or 
+                        approx(frame.w, max.w * 2/3, 20) or
+                        approx(frame.w, max.w * 1/3, 20)
+    
+    if isLeftSide and isHalfWidth then
+        -- 已经在左半屏，启用循环：1/2 -> 2/3 -> 5/6
+        local state = cycleState[id] or 0
+        state = state + 1
+        if state > 3 then state = 1 end
+        cycleState[id] = state
+        local widths = {0.5, 2/3, 5/6}
+        local width = max.w * widths[state]
+        setWinFrame(win, hs.geometry.rect(max.x, max.y, width, max.h))
+    else
+        -- 不在左半屏，先设为 1/2，重置循环
+        cycleState[id] = 1
+        setWinFrame(win, hs.geometry.rect(max.x, max.y, max.w * 0.5, max.h))
+    end
 end)
 
--- 右半屏
+-- 右半屏循环：只有已经在右半屏位置时才循环
 hs.hotkey.bind(mash, "right", function()
     local win = hs.window.focusedWindow()
     if not win then return end
     saveWindowState(win)
+    
+    local id = win:id()
     local max = getWinScreen(win)
-    setWinFrame(win, hs.geometry.rect(max.x + max.w * 0.5, max.y, max.w * 0.5, max.h))
+    local frame = win:frame()
+    
+    -- 检查是否已经在右侧且宽度是半屏系列
+    local isRightSide = approx(frame.x + frame.w, max.x + max.w, 5)
+    local isHalfWidth = approx(frame.w, max.w * 0.5, 20) or 
+                        approx(frame.w, max.w * 2/3, 20) or
+                        approx(frame.w, max.w * 5/6, 20)
+    
+    if isRightSide and isHalfWidth then
+        -- 已经在右半屏，启用循环：1/2 -> 2/3 -> 5/6
+        local state = cycleState[id] or 0
+        state = state + 1
+        if state > 3 then state = 1 end
+        cycleState[id] = state
+        local widths = {0.5, 2/3, 5/6}
+        local width = max.w * widths[state]
+        local x = max.x + max.w - width
+        setWinFrame(win, hs.geometry.rect(x, max.y, width, max.h))
+    else
+        -- 不在右半屏，先设为右 1/2，重置循环
+        cycleState[id] = 1
+        setWinFrame(win, hs.geometry.rect(max.x + max.w * 0.5, max.y, max.w * 0.5, max.h))
+    end
 end)
 
 -- 上半屏
@@ -119,12 +176,20 @@ hs.hotkey.bind(mash, "return", function()
     setWinFrame(win, hs.geometry.rect(max.x, max.y, max.w, max.h))
 end)
 
--- 居中
+-- 居中（手动计算，无动画）
 hs.hotkey.bind(mash, "c", function()
     local win = hs.window.focusedWindow()
     if not win then return end
     saveWindowState(win)
-    win:centerOnScreen()
+    
+    local max = getWinScreen(win)
+    local frame = win:frame()
+    
+    -- 计算居中位置
+    local newX = max.x + (max.w - frame.w) / 2
+    local newY = max.y + (max.h - frame.h) / 2
+    
+    setWinFrame(win, hs.geometry.rect(newX, newY, frame.w, frame.h))
 end)
 
 -- 还原（Backspace/Delete 键）
@@ -195,38 +260,69 @@ hs.hotkey.bind(mash, "2", function()
     setWinFrame(win, hs.geometry.rect(max.x + max.w * 0.5, max.y + max.h * 0.5, max.w * 0.5, max.h * 0.5))
 end)
 
--- 左三分之一
-hs.hotkey.bind(mash, "\\", function()
+-- 三分之一循环状态
+local thirdCycleState = {}
+
+-- 左 1/3 循环：只有在左侧1/3位置时才循环位置（左→中→右）
+hs.hotkey.bind(mash, ",", function()
     local win = hs.window.focusedWindow()
     if not win then return end
     saveWindowState(win)
+    
+    local id = win:id()
     local max = getWinScreen(win)
-    setWinFrame(win, hs.geometry.rect(max.x, max.y, max.w / 3, max.h))
+    local frame = win:frame()
+    
+    -- 检查是否在左侧（x ≈ 屏幕左边缘）且宽度 ≈ 1/3
+    local isLeftSide = approx(frame.x, max.x, 5)
+    local isThirdWidth = approx(frame.w, max.w / 3, 20)
+    
+    if isLeftSide and isThirdWidth then
+        -- 已经在左侧 1/3，循环位置：左(1) -> 中(2) -> 右(3) -> 左(1)
+        local state = thirdCycleState[id] or 0
+        state = state + 1
+        if state > 3 then state = 1 end
+        thirdCycleState[id] = state
+        
+        local xPositions = {0, max.w / 3, max.w * 2 / 3}
+        local x = max.x + xPositions[state]
+        setWinFrame(win, hs.geometry.rect(x, max.y, max.w / 3, max.h))
+    else
+        -- 不在左侧 1/3，设为左 1/3，重置循环
+        thirdCycleState[id] = 1
+        setWinFrame(win, hs.geometry.rect(max.x, max.y, max.w / 3, max.h))
+    end
 end)
 
--- 中三分之一 (使用 . 键，因为 m 被 moveDown 占用)
--- 循环切换 1/2, 1/3, 2/3 大小（类似 Rectangle 的 repeated execution）
-local cycleSizes = {0.5, 1/3, 2/3}
-local currentSizeIndex = 1
-
-hs.hotkey.bind(mash, "tab", function()
+-- 右 1/3 循环：只有在右侧1/3位置时才反向循环（右→中→左）
+hs.hotkey.bind(mash, ".", function()
     local win = hs.window.focusedWindow()
     if not win then return end
     saveWindowState(win)
+    
+    local id = win:id()
     local max = getWinScreen(win)
-    local size = cycleSizes[currentSizeIndex]
-    currentSizeIndex = currentSizeIndex % #cycleSizes + 1
-    setWinFrame(win, hs.geometry.rect(max.x, max.y, max.w * size, max.h))
-    notify("窗口大小", math.floor(size * 100) .. "%")
-end)
-
--- 右三分之一
-hs.hotkey.bind(mash, "/", function()
-    local win = hs.window.focusedWindow()
-    if not win then return end
-    saveWindowState(win)
-    local max = getWinScreen(win)
-    setWinFrame(win, hs.geometry.rect(max.x + max.w * 2 / 3, max.y, max.w / 3, max.h))
+    local frame = win:frame()
+    
+    -- 检查是否在右侧（x + w ≈ 屏幕右边缘）且宽度 ≈ 1/3
+    local isRightSide = approx(frame.x + frame.w, max.x + max.w, 5)
+    local isThirdWidth = approx(frame.w, max.w / 3, 20)
+    
+    if isRightSide and isThirdWidth then
+        -- 已经在右侧 1/3，反向循环：右(3) -> 中(2) -> 左(1) -> 右(3)
+        local state = thirdCycleState[id] or 4  -- 4表示未初始化
+        state = state - 1
+        if state < 1 then state = 3 end
+        thirdCycleState[id] = state
+        
+        local xPositions = {0, max.w / 3, max.w * 2 / 3}
+        local x = max.x + xPositions[state]
+        setWinFrame(win, hs.geometry.rect(x, max.y, max.w / 3, max.h))
+    else
+        -- 不在右侧 1/3，设为右 1/3，设置状态为右(3)
+        thirdCycleState[id] = 3
+        setWinFrame(win, hs.geometry.rect(max.x + max.w * 2 / 3, max.y, max.w / 3, max.h))
+    end
 end)
 
 -- ============================================
@@ -235,29 +331,31 @@ end)
 
 local moveStep = 50  -- 移动步长
 
-hs.hotkey.bind(mash, ",", function()
+-- 窗口移动（微调位置，使用 Cmd + Option + 方向键）
+local moveKey = {"cmd", "alt"}
+
+hs.hotkey.bind(moveKey, "left", function()
     local win = hs.window.focusedWindow()
     if not win then return end
     local frame = win:frame()
     setWinFrame(win, hs.geometry.rect(frame.x - moveStep, frame.y, frame.w, frame.h))
 end)
 
-hs.hotkey.bind(mash, "'", function()
+hs.hotkey.bind(moveKey, "right", function()
     local win = hs.window.focusedWindow()
     if not win then return end
     local frame = win:frame()
     setWinFrame(win, hs.geometry.rect(frame.x + moveStep, frame.y, frame.w, frame.h))
 end)
 
-hs.hotkey.bind(mash, "[", function()
+hs.hotkey.bind(moveKey, "up", function()
     local win = hs.window.focusedWindow()
     if not win then return end
     local frame = win:frame()
     setWinFrame(win, hs.geometry.rect(frame.x, frame.y - moveStep, frame.w, frame.h))
 end)
 
--- moveDown: m 键
-hs.hotkey.bind(mash, "m", function()
+hs.hotkey.bind(moveKey, "down", function()
     local win = hs.window.focusedWindow()
     if not win then return end
     local frame = win:frame()
