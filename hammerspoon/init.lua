@@ -1088,13 +1088,10 @@ function EdgeDock.recoverHiddenWindows()
             -- 如果窗口在屏幕右侧外（被藏起来了），把它拉回来
             -- 扩大检测范围：从 rightEdge-50 到 rightEdge+100，支持 peekWidth=0 的情况
             if frame.x >= rightEdge - 50 and frame.x <= rightEdge + 100 then
-                -- 窗口被藏在右边，恢复到屏幕内（居中）
-                -- 使用最小默认尺寸如果 frame 尺寸异常
-                local winW = math.max(frame.w, 400)
-                local winH = math.max(frame.h, 300)
-                local newX = screen.x + (screen.w - winW) / 2
-                local newY = screen.y + (screen.h - winH) / 2
-                setWinFrame(win, hs.geometry.rect(newX, newY, winW, winH))
+                -- 窗口被藏在右边，恢复到屏幕内（居中），保持原始尺寸
+                local newX = screen.x + (screen.w - frame.w) / 2
+                local newY = screen.y + (screen.h - frame.h) / 2
+                setWinFrame(win, hs.geometry.rect(newX, newY, frame.w, frame.h))
                 print("[EdgeDock] 恢复窗口: " .. (win:application():name() or "Unknown"))
             end
         end
