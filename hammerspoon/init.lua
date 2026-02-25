@@ -684,10 +684,10 @@ local EdgeDock = {
     },
     config = {
         maxSlots = 5,       -- 最大槽位数
-        barWidth = 10,      -- 小条宽度
-        barHeight = 220,     -- 小条高度
-        barGap = 20,        -- 小条之间的空隙
-        peekWidth = 3,      -- 窗口 peek 出来的宽度
+        barWidth = 6,      -- 小条宽度
+        barHeight = 230,     -- 小条高度
+        barGap = 10,        -- 小条之间的空隙
+        peekWidth = 1,      -- 窗口 peek 出来的宽度
         hideDelay = 0,    -- 鼠标离开后多久收起（秒）
         dragThreshold = 10, -- 拖拽检测阈值（像素）
     }
@@ -746,7 +746,7 @@ function EdgeDock.refreshBars()
                 type = "text",
                 text = string.upper(string.sub(slot.appName, 1, 1)),
                 textSize = 14,
-                textColor = {alpha = 1, red = 0, green = 0, blue = 0},
+                textColor = {alpha = 0, red = 0, green = 0, blue = 0},
                 frame = {x = 0, y = h/2 - 10, w = w, h = 20},
                 textAlignment = "center",
             })
@@ -856,17 +856,18 @@ function EdgeDock.dockWindow(win, slotIndex)
     end
     
     local app = win:application()
-    local screen = win:screen():frame()
     local frame = win:frame()
     
-    -- 获取槽位位置
+    -- 使用主屏幕（和小条一致），而不是窗口所在屏幕
+    local screen = hs.screen.mainScreen():frame()
+    
+    -- 获取槽位位置（基于主屏幕）
     local sx, sy, sw, sh = EdgeDock.getSlotPosition(slotIndex)
     
     -- 计算窗口在槽位区域内的垂直居中位置
     local winY = sy + (sh - frame.h) / 2
     
     -- 确保窗口不会超出屏幕顶部和底部
-    local screen = win:screen():frame()
     if winY < screen.y then
         winY = screen.y
     end
@@ -933,11 +934,15 @@ function EdgeDock.peekWindow(slotIndex)
     end
     
     if not slot.isShowing then
-        local screen = win:screen():frame()
+        -- 使用主屏幕（和小条一致）
+        local screen = hs.screen.mainScreen():frame()
+        -- 使用 originalFrame 的尺寸（窗口在屏幕外时 win:frame() 可能返回错误值）
+        local winW = slot.originalFrame.w
+        local winH = slot.originalFrame.h
         -- 靠右显示，保持大小不变，y 坐标垂直居中于槽位
-        local showX = screen.x + screen.w - win:frame().w
+        local showX = screen.x + screen.w - winW
         
-        setWinFrame(win, hs.geometry.rect(showX, slot.winY, win:frame().w, win:frame().h))
+        setWinFrame(win, hs.geometry.rect(showX, slot.winY, winW, winH))
         slot.isShowing = true
         
         -- 将窗口置顶并激活（最前面）
@@ -966,11 +971,12 @@ function EdgeDock.hideWindow(slotIndex)
         return
     end
     
-    local screen = win:screen():frame()
+    -- 使用主屏幕（和小条一致）
+    local screen = hs.screen.mainScreen():frame()
     local frame = win:frame()
     local hideX = screen.x + screen.w - EdgeDock.config.peekWidth
     
-    setWinFrame(win, hs.geometry.rect(hideX, slot.winY, frame.w, frame.h))
+    setWinFrame(win, hs.geometry.rect(hideX, slot.winY, EdgeDock.config.peekWidth, frame.h))
     slot.isShowing = false
 end
 
@@ -1001,6 +1007,8 @@ end
 -- 鼠标移动监听（仅用于悬停检测，不拦截事件）
 EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, function(e)
     local mousePos = e:location()
+    local screen = hs.screen.mainScreen():frame()
+    local rightEdge = screen.x + screen.w
     
     -- 悬停检测
     for i = 1, EdgeDock.config.maxSlots do
@@ -1008,8 +1016,9 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
         if not slot then goto continue end
         
         local sx, sy, sw, sh = EdgeDock.getSlotPosition(i)
-        local inSlotArea = mousePos.x >= sx - 10 and mousePos.x <= sx + sw + 10
-                          and mousePos.y >= sy and mousePos.y <= sy + sh
+        -- 扩大检测区域：屏幕右边缘附近都能触发（支持 peekWidth=0 的情况）
+        local inSlotArea = mousePos.x >= sx - 20 and mousePos.x <= rightEdge + 5
+                          and mousePos.y >= sy - 5 and mousePos.y <= sy + sh + 5
         
         -- 检测是否在槽位区域 - 显示窗口
         if inSlotArea and not slot.isShowing then
@@ -1019,8 +1028,9 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
         -- 检测是否离开窗口区域 - 启动隐藏计时器
         if slot.isShowing then
             local inWindow = EdgeDock.isPointInWindow(mousePos.x, mousePos.y, slot.win)
-            local inSlot = mousePos.x >= sx and mousePos.x <= sx + sw + 5
-                          and mousePos.y >= sy and mousePos.y <= sy + sh
+            -- 扩大槽位检测区域，确保鼠标在小条附近时不会误判为离开
+            local inSlot = mousePos.x >= sx - 30 and mousePos.x <= rightEdge + 10
+                          and mousePos.y >= sy - 10 and mousePos.y <= sy + sh + 10
             
             -- 既不在窗口内，也不在槽位上
             if not inWindow and not inSlot then
@@ -1076,11 +1086,15 @@ function EdgeDock.recoverHiddenWindows()
         if win:isStandard() then
             local frame = win:frame()
             -- 如果窗口在屏幕右侧外（被藏起来了），把它拉回来
-            if frame.x >= rightEdge - 10 and frame.x <= rightEdge + 50 then
+            -- 扩大检测范围：从 rightEdge-50 到 rightEdge+100，支持 peekWidth=0 的情况
+            if frame.x >= rightEdge - 50 and frame.x <= rightEdge + 100 then
                 -- 窗口被藏在右边，恢复到屏幕内（居中）
-                local newX = screen.x + (screen.w - frame.w) / 2
-                local newY = screen.y + (screen.h - frame.h) / 2
-                setWinFrame(win, hs.geometry.rect(newX, newY, frame.w, frame.h))
+                -- 使用最小默认尺寸如果 frame 尺寸异常
+                local winW = math.max(frame.w, 400)
+                local winH = math.max(frame.h, 300)
+                local newX = screen.x + (screen.w - winW) / 2
+                local newY = screen.y + (screen.h - winH) / 2
+                setWinFrame(win, hs.geometry.rect(newX, newY, winW, winH))
                 print("[EdgeDock] 恢复窗口: " .. (win:application():name() or "Unknown"))
             end
         end
