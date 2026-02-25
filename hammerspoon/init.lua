@@ -17,6 +17,25 @@ local mash = {"ctrl", "alt"}           -- 主修饰键：Ctrl + Option
 local mashShift = {"ctrl", "alt", "shift"}  -- Ctrl + Option + Shift
 
 -- ============================================
+-- 边距配置
+-- ============================================
+
+local margin = {
+    outer = 10,      -- 左右两侧边距（距离屏幕边缘）
+    inner = 20,      -- 中间边距（窗口之间的空隙，比outer大一些）
+}
+
+-- 计算屏幕可用区域（扣除边距后的区域）
+function getUsableArea(max)
+    return {
+        x = max.x + margin.outer,
+        y = max.y,
+        w = max.w - margin.outer * 2,
+        h = max.h
+    }
+end
+
+-- ============================================
 -- 工具函数
 -- ============================================
 
@@ -92,13 +111,17 @@ hs.hotkey.bind(mash, "left", function()
     
     local id = win:id()
     local max = getWinScreen(win)
+    local area = getUsableArea(max)
     local frame = win:frame()
     
+    -- 计算左侧半屏的参考区域（用于检测当前位置）
+    local leftHalfWidth = max.w * 0.5
+    
     -- 检查是否已经在左侧且宽度是半屏系列（0.5, 2/3, 1/3）
-    local isLeftSide = approx(frame.x, max.x, 5)
-    local isHalfWidth = approx(frame.w, max.w * 0.5, 20) or 
-                        approx(frame.w, max.w * 2/3, 20) or
-                        approx(frame.w, max.w * 1/3, 20)
+    local isLeftSide = approx(frame.x, max.x, 5) or approx(frame.x, area.x, 10)
+    local isHalfWidth = approx(frame.w, max.w * 0.5, 40) or 
+                        approx(frame.w, max.w * 2/3, 40) or
+                        approx(frame.w, max.w * 1/3, 40)
     
     if isLeftSide and isHalfWidth then
         -- 已经在左半屏，启用循环：1/2 -> 2/3 -> 5/6
@@ -107,12 +130,14 @@ hs.hotkey.bind(mash, "left", function()
         if state > 3 then state = 1 end
         cycleState[id] = state
         local widths = {0.5, 2/3, 5/6}
-        local width = max.w * widths[state]
-        setWinFrame(win, hs.geometry.rect(max.x, max.y, width, max.h))
+        -- 扣除中间边距后计算实际宽度
+        local width = area.w * widths[state] - margin.inner * widths[state] / 2
+        setWinFrame(win, hs.geometry.rect(area.x, area.y, width, area.h))
     else
         -- 不在左半屏，先设为 1/2，重置循环
         cycleState[id] = 1
-        setWinFrame(win, hs.geometry.rect(max.x, max.y, max.w * 0.5, max.h))
+        local width = area.w * 0.5 - margin.inner / 2
+        setWinFrame(win, hs.geometry.rect(area.x, area.y, width, area.h))
     end
 end)
 
@@ -124,13 +149,15 @@ hs.hotkey.bind(mash, "right", function()
     
     local id = win:id()
     local max = getWinScreen(win)
+    local area = getUsableArea(max)
     local frame = win:frame()
     
     -- 检查是否已经在右侧且宽度是半屏系列
-    local isRightSide = approx(frame.x + frame.w, max.x + max.w, 5)
-    local isHalfWidth = approx(frame.w, max.w * 0.5, 20) or 
-                        approx(frame.w, max.w * 2/3, 20) or
-                        approx(frame.w, max.w * 5/6, 20)
+    local isRightSide = approx(frame.x + frame.w, max.x + max.w, 5) or 
+                        approx(frame.x + frame.w, max.x + max.w - margin.outer, 10)
+    local isHalfWidth = approx(frame.w, max.w * 0.5, 40) or 
+                        approx(frame.w, max.w * 2/3, 40) or
+                        approx(frame.w, max.w * 5/6, 40)
     
     if isRightSide and isHalfWidth then
         -- 已经在右半屏，启用循环：1/2 -> 2/3 -> 5/6
@@ -139,13 +166,16 @@ hs.hotkey.bind(mash, "right", function()
         if state > 3 then state = 1 end
         cycleState[id] = state
         local widths = {0.5, 2/3, 5/6}
-        local width = max.w * widths[state]
-        local x = max.x + max.w - width
-        setWinFrame(win, hs.geometry.rect(x, max.y, width, max.h))
+        -- 扣除中间边距后计算实际宽度
+        local width = area.w * widths[state] - margin.inner * widths[state] / 2
+        local x = area.x + area.w - width
+        setWinFrame(win, hs.geometry.rect(x, area.y, width, area.h))
     else
         -- 不在右半屏，先设为右 1/2，重置循环
         cycleState[id] = 1
-        setWinFrame(win, hs.geometry.rect(max.x + max.w * 0.5, max.y, max.w * 0.5, max.h))
+        local width = area.w * 0.5 - margin.inner / 2
+        local x = area.x + area.w - width
+        setWinFrame(win, hs.geometry.rect(x, area.y, width, area.h))
     end
 end)
 
@@ -155,7 +185,8 @@ hs.hotkey.bind(mash, "up", function()
     if not win then return end
     saveWindowState(win)
     local max = getWinScreen(win)
-    setWinFrame(win, hs.geometry.rect(max.x, max.y, max.w, max.h * 0.5))
+    local area = getUsableArea(max)
+    setWinFrame(win, hs.geometry.rect(area.x, area.y, area.w, max.h * 0.5))
 end)
 
 -- 下半屏
@@ -164,16 +195,18 @@ hs.hotkey.bind(mash, "down", function()
     if not win then return end
     saveWindowState(win)
     local max = getWinScreen(win)
-    setWinFrame(win, hs.geometry.rect(max.x, max.y + max.h * 0.5, max.w, max.h * 0.5))
+    local area = getUsableArea(max)
+    setWinFrame(win, hs.geometry.rect(area.x, area.y + max.h * 0.5, area.w, max.h * 0.5))
 end)
 
--- 最大化
+-- 最大化（应用边距）
 hs.hotkey.bind(mash, "return", function()
     local win = hs.window.focusedWindow()
     if not win then return end
     saveWindowState(win)
     local max = getWinScreen(win)
-    setWinFrame(win, hs.geometry.rect(max.x, max.y, max.w, max.h))
+    local area = getUsableArea(max)
+    setWinFrame(win, hs.geometry.rect(area.x, area.y, area.w, area.h))
 end)
 
 -- 居中（手动计算，无动画）
@@ -203,10 +236,10 @@ hs.hotkey.bind(mash, "l", function()
     if not win then return end
     saveWindowState(win)
     local max = getWinScreen(win)
-    local margin = 10
+    local gap = 10  -- 几乎最大化的额外边距
     setWinFrame(win, hs.geometry.rect(
-        max.x + margin, max.y + margin,
-        max.w - margin * 2, max.h - margin * 2
+        max.x + margin.outer + gap, max.y + gap,
+        max.w - margin.outer * 2 - gap * 2, max.h - gap * 2
     ))
 end)
 
@@ -230,7 +263,10 @@ hs.hotkey.bind(mash, "u", function()
     if not win then return end
     saveWindowState(win)
     local max = getWinScreen(win)
-    setWinFrame(win, hs.geometry.rect(max.x, max.y, max.w * 0.5, max.h * 0.5))
+    local area = getUsableArea(max)
+    local w = (area.w - margin.inner) / 2
+    local h = max.h / 2
+    setWinFrame(win, hs.geometry.rect(area.x, area.y, w, h))
 end)
 
 -- 右上
@@ -239,7 +275,11 @@ hs.hotkey.bind(mash, "i", function()
     if not win then return end
     saveWindowState(win)
     local max = getWinScreen(win)
-    setWinFrame(win, hs.geometry.rect(max.x + max.w * 0.5, max.y, max.w * 0.5, max.h * 0.5))
+    local area = getUsableArea(max)
+    local w = (area.w - margin.inner) / 2
+    local h = max.h / 2
+    local x = area.x + (area.w + margin.inner) / 2
+    setWinFrame(win, hs.geometry.rect(x, area.y, w, h))
 end)
 
 -- 左下
@@ -248,7 +288,11 @@ hs.hotkey.bind(mash, "0", function()
     if not win then return end
     saveWindowState(win)
     local max = getWinScreen(win)
-    setWinFrame(win, hs.geometry.rect(max.x, max.y + max.h * 0.5, max.w * 0.5, max.h * 0.5))
+    local area = getUsableArea(max)
+    local w = (area.w - margin.inner) / 2
+    local h = max.h / 2
+    local y = area.y + max.h / 2
+    setWinFrame(win, hs.geometry.rect(area.x, y, w, h))
 end)
 
 -- 右下
@@ -257,7 +301,12 @@ hs.hotkey.bind(mash, "2", function()
     if not win then return end
     saveWindowState(win)
     local max = getWinScreen(win)
-    setWinFrame(win, hs.geometry.rect(max.x + max.w * 0.5, max.y + max.h * 0.5, max.w * 0.5, max.h * 0.5))
+    local area = getUsableArea(max)
+    local w = (area.w - margin.inner) / 2
+    local h = max.h / 2
+    local x = area.x + (area.w + margin.inner) / 2
+    local y = area.y + max.h / 2
+    setWinFrame(win, hs.geometry.rect(x, y, w, h))
 end)
 
 -- 三分之一循环状态
@@ -271,11 +320,15 @@ hs.hotkey.bind(mash, ",", function()
     
     local id = win:id()
     local max = getWinScreen(win)
+    local area = getUsableArea(max)
     local frame = win:frame()
     
+    -- 计算三分之一屏的宽度（扣除中间边距后）
+    local thirdW = (area.w - margin.inner * 2) / 3
+    
     -- 检查是否在左侧（x ≈ 屏幕左边缘）且宽度 ≈ 1/3
-    local isLeftSide = approx(frame.x, max.x, 5)
-    local isThirdWidth = approx(frame.w, max.w / 3, 20)
+    local isLeftSide = approx(frame.x, area.x, 10)
+    local isThirdWidth = approx(frame.w, thirdW, 30)
     
     if isLeftSide and isThirdWidth then
         -- 已经在左侧 1/3，循环位置：左(1) -> 中(2) -> 右(3) -> 左(1)
@@ -284,13 +337,18 @@ hs.hotkey.bind(mash, ",", function()
         if state > 3 then state = 1 end
         thirdCycleState[id] = state
         
-        local xPositions = {0, max.w / 3, max.w * 2 / 3}
-        local x = max.x + xPositions[state]
-        setWinFrame(win, hs.geometry.rect(x, max.y, max.w / 3, max.h))
+        -- 计算三个位置的x坐标（含中间边距）
+        local xPositions = {
+            area.x,
+            area.x + thirdW + margin.inner,
+            area.x + (thirdW + margin.inner) * 2
+        }
+        local x = xPositions[state]
+        setWinFrame(win, hs.geometry.rect(x, area.y, thirdW, area.h))
     else
         -- 不在左侧 1/3，设为左 1/3，重置循环
         thirdCycleState[id] = 1
-        setWinFrame(win, hs.geometry.rect(max.x, max.y, max.w / 3, max.h))
+        setWinFrame(win, hs.geometry.rect(area.x, area.y, thirdW, area.h))
     end
 end)
 
@@ -302,11 +360,16 @@ hs.hotkey.bind(mash, ".", function()
     
     local id = win:id()
     local max = getWinScreen(win)
+    local area = getUsableArea(max)
     local frame = win:frame()
     
+    -- 计算三分之一屏的宽度（扣除中间边距后）
+    local thirdW = (area.w - margin.inner * 2) / 3
+    
     -- 检查是否在右侧（x + w ≈ 屏幕右边缘）且宽度 ≈ 1/3
-    local isRightSide = approx(frame.x + frame.w, max.x + max.w, 5)
-    local isThirdWidth = approx(frame.w, max.w / 3, 20)
+    local rightEdge = area.x + area.w
+    local isRightSide = approx(frame.x + frame.w, rightEdge, 10)
+    local isThirdWidth = approx(frame.w, thirdW, 30)
     
     if isRightSide and isThirdWidth then
         -- 已经在右侧 1/3，反向循环：右(3) -> 中(2) -> 左(1) -> 右(3)
@@ -315,13 +378,19 @@ hs.hotkey.bind(mash, ".", function()
         if state < 1 then state = 3 end
         thirdCycleState[id] = state
         
-        local xPositions = {0, max.w / 3, max.w * 2 / 3}
-        local x = max.x + xPositions[state]
-        setWinFrame(win, hs.geometry.rect(x, max.y, max.w / 3, max.h))
+        -- 计算三个位置的x坐标（含中间边距）
+        local xPositions = {
+            area.x,
+            area.x + thirdW + margin.inner,
+            area.x + (thirdW + margin.inner) * 2
+        }
+        local x = xPositions[state]
+        setWinFrame(win, hs.geometry.rect(x, area.y, thirdW, area.h))
     else
         -- 不在右侧 1/3，设为右 1/3，设置状态为右(3)
         thirdCycleState[id] = 3
-        setWinFrame(win, hs.geometry.rect(max.x + max.w * 2 / 3, max.y, max.w / 3, max.h))
+        local x = area.x + (thirdW + margin.inner) * 2
+        setWinFrame(win, hs.geometry.rect(x, area.y, thirdW, area.h))
     end
 end)
 
@@ -567,6 +636,37 @@ end
 -- 平铺快捷键
 hs.hotkey.bind({"ctrl", "alt", "cmd"}, "t", TileManager.tileCurrent)
 hs.hotkey.bind({"ctrl", "alt", "cmd"}, "o", TileManager.restoreCurrent)
+
+-- ============================================
+-- 窗口靠在最左/最右（保持高度和宽度不变，贴到屏幕边缘）
+-- ============================================
+
+-- 靠在最左（左边贴边，无边距）
+hs.hotkey.bind(mash, ";", function()
+    local win = hs.window.focusedWindow()
+    if not win then return end
+    saveWindowState(win)
+    
+    local max = getWinScreen(win)
+    local frame = win:frame()
+    
+    -- 移到最左边，保持高度和宽度不变
+    setWinFrame(win, hs.geometry.rect(max.x, frame.y, frame.w, frame.h))
+end)
+
+-- 靠在最右（右边贴边，无边距）
+hs.hotkey.bind(mash, "'", function()
+    local win = hs.window.focusedWindow()
+    if not win then return end
+    saveWindowState(win)
+    
+    local max = getWinScreen(win)
+    local frame = win:frame()
+    
+    -- 移到最右边，保持高度和宽度不变
+    local newX = max.x + max.w - frame.w
+    setWinFrame(win, hs.geometry.rect(newX, frame.y, frame.w, frame.h))
+end)
 
 -- ============================================
 -- 启动提示
