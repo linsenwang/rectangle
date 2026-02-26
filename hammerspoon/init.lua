@@ -739,7 +739,7 @@ function EdgeDock.refreshBars()
             bar:appendElements({
                 type = "rectangle",
                 action = "fill",
-                fillColor = {alpha = 0.5, red = 1, green = 1, blue = 1},
+                fillColor = {alpha = 0.3, red = 1, green = 1, blue = 1},
                 roundedRectRadii = {xRadius = 4, yRadius = 4},
             })
             bar:appendElements({
@@ -889,9 +889,10 @@ function EdgeDock.dockWindow(win, slotIndex)
         winY = winY,        -- 窗口实际显示的 Y（垂直居中）
     }
     
-    -- 隐藏到屏幕外（只留 peekWidth），y 坐标垂直居中于槽位
-    local hideX = screen.x + screen.w - EdgeDock.config.peekWidth
-    setWinFrame(win, hs.geometry.rect(hideX, winY, frame.w, frame.h))
+    -- 隐藏到屏幕右下角（只露出1x1像素，保持尺寸）
+    local hideX = screen.x + screen.w - 1
+    local hideY = screen.y + screen.h - 1
+    setWinFrame(win, hs.geometry.rect(hideX, hideY, frame.w, frame.h))
     
     EdgeDock.refreshBars()
     notify("Edge Dock", "已停靠到槽位 " .. slotIndex)
@@ -946,7 +947,6 @@ function EdgeDock.peekWindow(slotIndex)
         slot.isShowing = true
         
         -- 将窗口置顶并激活（最前面）
-        win:unminimize()  -- 确保不是最小化状态
         win:raise()
         win:focus()
         -- 稍微延迟再次确保置顶
@@ -959,7 +959,7 @@ function EdgeDock.peekWindow(slotIndex)
     end
 end
 
--- 隐藏窗口（滑回边缘）
+-- 隐藏窗口（移到右下角，只露出1x1像素）
 function EdgeDock.hideWindow(slotIndex)
     local slot = EdgeDock.slots[slotIndex]
     if not slot then return end
@@ -971,12 +971,12 @@ function EdgeDock.hideWindow(slotIndex)
         return
     end
     
-    -- 使用主屏幕（和小条一致）
+    -- 移到屏幕右下角（只露出1x1像素，保持原尺寸）
     local screen = hs.screen.mainScreen():frame()
-    local frame = win:frame()
-    local hideX = screen.x + screen.w - EdgeDock.config.peekWidth
+    local hideX = screen.x + screen.w - 1
+    local hideY = screen.y + screen.h - 1
     
-    setWinFrame(win, hs.geometry.rect(hideX, slot.winY, EdgeDock.config.peekWidth, frame.h))
+    setWinFrame(win, hs.geometry.rect(hideX, hideY, slot.originalFrame.w, slot.originalFrame.h))
     slot.isShowing = false
 end
 
@@ -1076,6 +1076,62 @@ EdgeDock.screenWatcher = hs.screen.watcher.new(function()
         EdgeDock.refreshBars()
     end)
 end)
+
+-- ============================================
+-- 屏幕切换后自动调整半屏窗口高度
+-- ============================================
+
+-- 检测窗口是否是"全高"类型（需要在新屏幕上保持全高）
+local function isFullHeightWindow(win)
+    local max = win:screen():frame()
+    local frame = win:frame()
+    
+    -- 检测是否是左/右半屏（宽度约为 0.5、2/3、5/6，位置在左/右边缘）
+    local isLeftSide = approx(frame.x, max.x, 10) or approx(frame.x, max.x + margin.outer, 15)
+    local isRightSide = approx(frame.x + frame.w, max.x + max.w, 10) or 
+                        approx(frame.x + frame.w, max.x + max.w - margin.outer, 15)
+    local isHalfWidth = approx(frame.w, max.w * 0.5, 40) or 
+                        approx(frame.w, max.w * 2/3, 40) or
+                        approx(frame.w, max.w * 5/6, 40)
+    
+    -- 检测是否是 1/3 分屏
+    local thirdW = (max.w - margin.outer * 2 - margin.inner * 2) / 3
+    local isThirdWidth = approx(frame.w, thirdW, 30)
+    local isThirdLayout = isThirdWidth and (
+        approx(frame.x, max.x + margin.outer, 15) or
+        approx(frame.x, max.x + margin.outer + thirdW + margin.inner, 15) or
+        approx(frame.x, max.x + margin.outer + (thirdW + margin.inner) * 2, 15)
+    )
+    
+    -- 如果高度已经约等于屏幕高度，也算（已经是全高了）
+    local isAlreadyFullHeight = approx(frame.h, max.h, 10)
+    
+    return (isHalfWidth and (isLeftSide or isRightSide)) or isThirdLayout or isAlreadyFullHeight
+end
+
+-- 屏幕变化监听器：自动调整窗口高度
+local screenChangeWatcher = hs.screen.watcher.new(function()
+    hs.timer.doAfter(0.5, function()
+        for _, win in ipairs(hs.window.allWindows()) do
+            if win:isStandard() then
+                local screen = win:screen()
+                if screen then
+                    local max = screen:frame()
+                    local frame = win:frame()
+                    
+                    -- 只处理那些看起来是"半屏/三分之一屏布局"的窗口
+                    if isFullHeightWindow(win) then
+                        -- 保持 x、w 不变，调整 y 和 h 使其填满新屏幕
+                        if not approx(frame.h, max.h, 10) or not approx(frame.y, max.y, 10) then
+                            setWinFrame(win, hs.geometry.rect(frame.x, max.y, frame.w, max.h))
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end)
+screenChangeWatcher:start()
 
 -- 恢复所有可能被之前脚本实例藏起来的窗口
 function EdgeDock.recoverHiddenWindows()
