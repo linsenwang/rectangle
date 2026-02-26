@@ -24,16 +24,17 @@ local mashShift = {"ctrl", "alt", "shift"}  -- Ctrl + Option + Shift
 -- ============================================
 
 local margin = {
-    outer = 20,      -- 左右两侧边距（距离屏幕边缘）
-    inner = 30,      -- 中间边距（窗口之间的空隙，比outer大一些）
+    left = 20,       -- 左侧边距（距离屏幕左边缘）
+    right = 6,      -- 右侧边距（距离屏幕右边缘）
+    inner = 30,      -- 中间边距（窗口之间的空隙）
 }
 
 -- 计算屏幕可用区域（扣除边距后的区域）
 function getUsableArea(max)
     return {
-        x = max.x + margin.outer,
+        x = max.x + margin.left,
         y = max.y,
-        w = max.w - margin.outer * 2,
+        w = max.w - margin.left - margin.right,
         h = max.h
     }
 end
@@ -157,7 +158,7 @@ hs.hotkey.bind(mash, "right", function()
     
     -- 检查是否已经在右侧且宽度是半屏系列
     local isRightSide = approx(frame.x + frame.w, max.x + max.w, 5) or 
-                        approx(frame.x + frame.w, max.x + max.w - margin.outer, 10)
+                        approx(frame.x + frame.w, max.x + max.w - margin.right, 10)
     local isHalfWidth = approx(frame.w, max.w * 0.5, 40) or 
                         approx(frame.w, max.w * 2/3, 40) or
                         approx(frame.w, max.w * 5/6, 40)
@@ -241,8 +242,8 @@ hs.hotkey.bind(mash, "l", function()
     local max = getWinScreen(win)
     local gap = 10  -- 几乎最大化的额外边距
     setWinFrame(win, hs.geometry.rect(
-        max.x + margin.outer + gap, max.y + gap,
-        max.w - margin.outer * 2 - gap * 2, max.h - gap * 2
+        max.x + margin.left + gap, max.y + gap,
+        max.w - margin.left - margin.right - gap * 2, max.h - gap * 2
     ))
 end)
 
@@ -1423,20 +1424,20 @@ local function isFullHeightWindow(win)
     local frame = win:frame()
     
     -- 检测是否是左/右半屏（宽度约为 0.5、2/3、5/6，位置在左/右边缘）
-    local isLeftSide = approx(frame.x, max.x, 10) or approx(frame.x, max.x + margin.outer, 15)
+    local isLeftSide = approx(frame.x, max.x, 10) or approx(frame.x, max.x + margin.left, 15)
     local isRightSide = approx(frame.x + frame.w, max.x + max.w, 10) or 
-                        approx(frame.x + frame.w, max.x + max.w - margin.outer, 15)
+                        approx(frame.x + frame.w, max.x + max.w - margin.right, 15)
     local isHalfWidth = approx(frame.w, max.w * 0.5, 40) or 
                         approx(frame.w, max.w * 2/3, 40) or
                         approx(frame.w, max.w * 5/6, 40)
     
     -- 检测是否是 1/3 分屏
-    local thirdW = (max.w - margin.outer * 2 - margin.inner * 2) / 3
+    local thirdW = (max.w - margin.left - margin.right - margin.inner * 2) / 3
     local isThirdWidth = approx(frame.w, thirdW, 30)
     local isThirdLayout = isThirdWidth and (
-        approx(frame.x, max.x + margin.outer, 15) or
-        approx(frame.x, max.x + margin.outer + thirdW + margin.inner, 15) or
-        approx(frame.x, max.x + margin.outer + (thirdW + margin.inner) * 2, 15)
+        approx(frame.x, max.x + margin.left, 15) or
+        approx(frame.x, max.x + margin.left + thirdW + margin.inner, 15) or
+        approx(frame.x, max.x + margin.left + (thirdW + margin.inner) * 2, 15)
     )
     
     -- 如果高度已经约等于屏幕高度，也算（已经是全高了）
