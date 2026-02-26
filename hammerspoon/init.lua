@@ -24,9 +24,9 @@ local mashShift = {"ctrl", "alt", "shift"}  -- Ctrl + Option + Shift
 -- ============================================
 
 local margin = {
-    left = 20,       -- 左侧边距（距离屏幕左边缘）
-    right = 6,      -- 右侧边距（距离屏幕右边缘）
-    inner = 30,      -- 中间边距（窗口之间的空隙）
+    left = 40,       -- 左侧边距（距离屏幕左边缘）
+    right = 12,      -- 右侧边距（距离屏幕右边缘）
+    inner = 40,      -- 中间边距（窗口之间的空隙）
 }
 
 -- 计算屏幕可用区域（扣除边距后的区域）
@@ -679,6 +679,7 @@ end)
 local EdgeDock = {
     slots = {},             -- 槽位 {win, originalFrame, appName, isShowing, hideTimer}
     bars = {},              -- 小条 UI 元素
+    mask = nil,             -- 右侧遮罩条（遮挡可能露出的窗口边缘）
     dragState = {           -- 拖拽状态
         isDragging = false,
         dragWin = nil,
@@ -688,11 +689,12 @@ local EdgeDock = {
     },
     config = {
         maxSlots = 5,       -- 最大槽位数
-        barWidth = 6,      -- 小条宽度
-        barHeight = 230,     -- 小条高度
+        barWidth = 6,       -- 小条宽度
+        topMargin = 6,    -- 顶部边距（距离屏幕上边缘）
+        bottomMargin = 6, -- 底部边距（距离屏幕下边缘）
         barGap = 10,        -- 小条之间的空隙
         peekWidth = 1,      -- 窗口 peek 出来的宽度
-        hideDelay = 0,    -- 鼠标离开后多久收起（秒）
+        hideDelay = 0,      -- 鼠标离开后多久收起（秒）
         dragThreshold = 10, -- 拖拽检测阈值（像素）
     }
 }
@@ -890,15 +892,22 @@ function EdgeDock.brightenColor(color, factor)
     }
 end
 
--- 获取槽位位置（带空隙，垂直居中分布）
+-- 计算小条高度（根据屏幕高度自动分配）
+function EdgeDock.getBarHeight()
+    local screen = hs.screen.mainScreen():frame()
+    local availableHeight = screen.h - EdgeDock.config.topMargin - EdgeDock.config.bottomMargin
+    local totalGap = (EdgeDock.config.maxSlots - 1) * EdgeDock.config.barGap
+    return math.floor((availableHeight - totalGap) / EdgeDock.config.maxSlots)
+end
+
+-- 获取槽位位置（根据屏幕高度自动分布）
 function EdgeDock.getSlotPosition(slotIndex)
     local screen = hs.screen.mainScreen():frame()
-    local totalSlotsHeight = EdgeDock.config.maxSlots * EdgeDock.config.barHeight 
-                            + (EdgeDock.config.maxSlots - 1) * EdgeDock.config.barGap
-    local startY = screen.y + (screen.h - totalSlotsHeight) / 2
-    local x = screen.x + screen.w - EdgeDock.config.barWidth
-    local y = startY + (slotIndex - 1) * (EdgeDock.config.barHeight + EdgeDock.config.barGap)
-    return x, y, EdgeDock.config.barWidth, EdgeDock.config.barHeight
+    local barHeight = EdgeDock.getBarHeight()
+    local startY = screen.y + EdgeDock.config.topMargin
+    local x = screen.x + screen.w - EdgeDock.config.barWidth - 2  -- 减2px给遮罩条留位置
+    local y = startY + (slotIndex - 1) * (barHeight + EdgeDock.config.barGap)
+    return x, y, EdgeDock.config.barWidth, barHeight
 end
 
 -- 检查点是否在槽位区域
@@ -915,6 +924,23 @@ function EdgeDock.isPointInWindow(mouseX, mouseY, win)
     local frame = win:frame()
     return mouseX >= frame.x and mouseX <= frame.x + frame.w
            and mouseY >= frame.y and mouseY <= frame.y + frame.h
+end
+
+-- 创建/刷新右侧遮罩条（2px宽黑色，遮挡可能被推出的窗口边缘）
+function EdgeDock.refreshMask()
+    if EdgeDock.mask then
+        EdgeDock.mask:delete()
+    end
+    local screen = hs.screen.mainScreen():frame()
+    -- 2px宽，全屏高，纯黑，放在最右侧
+    EdgeDock.mask = hs.canvas.new({x = screen.x + screen.w - 2, y = screen.y, w = 2, h = screen.h})
+    EdgeDock.mask:appendElements({
+        type = "rectangle",
+        action = "fill",
+        fillColor = {alpha = 1, red = 0, green = 0, blue = 0},
+    })
+    EdgeDock.mask:level(hs.canvas.windowLevels.overlay)
+    EdgeDock.mask:show()
 end
 
 -- 创建/刷新所有小条
@@ -1119,7 +1145,8 @@ function EdgeDock.highlightBar(slotIndex, highlight)
     if not bar or not bar.canvas then return end
     
     local slot = EdgeDock.slots[slotIndex]
-    local w, h = EdgeDock.config.barWidth, EdgeDock.config.barHeight
+    local barHeight = EdgeDock.getBarHeight()
+    local w, h = EdgeDock.config.barWidth, barHeight
     
     -- 清除并重绘
     bar.canvas:removeElement(1)
@@ -1411,6 +1438,7 @@ end)
 EdgeDock.screenWatcher = hs.screen.watcher.new(function()
     hs.timer.doAfter(0.3, function()
         EdgeDock.refreshBars()
+        EdgeDock.refreshMask()
     end)
 end)
 
@@ -1496,8 +1524,9 @@ function EdgeDock.start()
     -- 先恢复可能被之前实例藏起来的窗口
     EdgeDock.recoverHiddenWindows()
     
-    -- 初始化小条
+    -- 初始化小条和遮罩
     EdgeDock.refreshBars()
+    EdgeDock.refreshMask()
     
     -- 启动监听器
     EdgeDock.mouseWatcher:start()
@@ -1514,6 +1543,10 @@ function EdgeDock.stop()
         if EdgeDock.slots[i] then
             EdgeDock.undockWindow(i)
         end
+    end
+    if EdgeDock.mask then
+        EdgeDock.mask:delete()
+        EdgeDock.mask = nil
     end
     EdgeDock.mouseWatcher:stop()
     EdgeDock.appWatcher:stop()
