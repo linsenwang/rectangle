@@ -25,7 +25,7 @@ local mashShift = {"ctrl", "alt", "shift"}  -- Ctrl + Option + Shift
 
 local margin = {
     left = 40,       -- 左侧边距（距离屏幕左边缘）
-    right = 12,      -- 右侧边距（距离屏幕右边缘）
+    right = 11,      -- 右侧边距（距离屏幕右边缘）
     inner = 40,      -- 中间边距（窗口之间的空隙）
 }
 
@@ -121,11 +121,11 @@ hs.hotkey.bind(mash, "left", function()
     -- 计算左侧半屏的参考区域（用于检测当前位置）
     local leftHalfWidth = max.w * 0.5
     
-    -- 检查是否已经在左侧且宽度是半屏系列（0.5, 2/3, 1/3）
+    -- 检查是否已经在左侧且宽度是半屏系列（0.5, 2/3, 5/6）
     local isLeftSide = approx(frame.x, max.x, 5) or approx(frame.x, area.x, 10)
-    local isHalfWidth = approx(frame.w, max.w * 0.5, 40) or 
-                        approx(frame.w, max.w * 2/3, 40) or
-                        approx(frame.w, max.w * 1/3, 40)
+    local isHalfWidth = approx(frame.w, area.w * 0.5, 50) or 
+                        approx(frame.w, area.w * 2/3, 50) or
+                        approx(frame.w, area.w * 5/6, 50)
     
     if isLeftSide and isHalfWidth then
         -- 已经在左半屏，启用循环：1/2 -> 2/3 -> 5/6
@@ -159,9 +159,9 @@ hs.hotkey.bind(mash, "right", function()
     -- 检查是否已经在右侧且宽度是半屏系列
     local isRightSide = approx(frame.x + frame.w, max.x + max.w, 5) or 
                         approx(frame.x + frame.w, max.x + max.w - margin.right, 10)
-    local isHalfWidth = approx(frame.w, max.w * 0.5, 40) or 
-                        approx(frame.w, max.w * 2/3, 40) or
-                        approx(frame.w, max.w * 5/6, 40)
+    local isHalfWidth = approx(frame.w, area.w * 0.5, 50) or 
+                        approx(frame.w, area.w * 2/3, 50) or
+                        approx(frame.w, area.w * 5/6, 50)
     
     if isRightSide and isHalfWidth then
         -- 已经在右半屏，启用循环：1/2 -> 2/3 -> 5/6
@@ -689,7 +689,7 @@ local EdgeDock = {
     },
     config = {
         maxSlots = 5,       -- 最大槽位数
-        barWidth = 6,       -- 小条宽度
+        barWidth = 4,       -- 小条宽度
         topMargin = 6,    -- 顶部边距（距离屏幕上边缘）
         bottomMargin = 6, -- 底部边距（距离屏幕下边缘）
         barGap = 10,        -- 小条之间的空隙
@@ -705,7 +705,7 @@ EdgeDock.appColorCache = {}
 -- 常用应用颜色表（基于实际图标）
 EdgeDock.knownAppColors = {
     ["WeChat"]  = {red = 0.35, green = 0.55, blue = 0.40}, -- 去饱和微信绿
-    ["ChatGPT"] = {red = 0.75, green = 0.75, blue = 0.75}, -- 浅灰
+    ["ChatGPT"] = {red = 0.5, green = 0.5, blue = 0.5}, -- 浅灰
     ["Music"]   = {red = 0.55, green = 0.32, blue = 0.38}, -- 灰玫红
     ["Kimi"]    = {red = 0.45, green = 0.50, blue = 0.65}, -- 灰蓝
     ["Safari"] = {red = 0.15, green = 0.55, blue = 0.95},      -- Safari 蓝
@@ -725,7 +725,7 @@ function EdgeDock.getAppIconColor(appName)
     -- 1. 先检查已知应用颜色表
     if EdgeDock.knownAppColors[appName] then
         local color = EdgeDock.brightenColor(EdgeDock.knownAppColors[appName], 1.3)
-        color.alpha = 0.8
+        color.alpha = 1
         EdgeDock.appColorCache[appName] = color
         return color
     end
@@ -905,7 +905,7 @@ function EdgeDock.getSlotPosition(slotIndex)
     local screen = hs.screen.mainScreen():frame()
     local barHeight = EdgeDock.getBarHeight()
     local startY = screen.y + EdgeDock.config.topMargin
-    local x = screen.x + screen.w - EdgeDock.config.barWidth - 2  -- 减2px给遮罩条留位置
+    local x = screen.x + screen.w - EdgeDock.config.barWidth - 5  -- 减5px给遮罩条留位置
     local y = startY + (slotIndex - 1) * (barHeight + EdgeDock.config.barGap)
     return x, y, EdgeDock.config.barWidth, barHeight
 end
