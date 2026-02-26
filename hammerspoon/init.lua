@@ -9,6 +9,9 @@ hs.window.animationDuration = 0
 -- 配置文件路径
 local CONFIG_PATH = os.getenv("HOME") .. "/.hammerspoon/"
 
+-- Edge Dock 状态文件路径
+local EDGEDOCK_STATE_FILE = CONFIG_PATH .. "edge_dock_state.json"
+
 -- ============================================
 -- 修饰键定义
 -- ============================================
@@ -967,6 +970,148 @@ function EdgeDock.refreshBars()
     end
 end
 
+-- 保存 Edge Dock 状态到文件
+function EdgeDock.saveState()
+    local state = {}
+    for i = 1, EdgeDock.config.maxSlots do
+        local slot = EdgeDock.slots[i]
+        if slot and slot.win and slot.win:isStandard() then
+            -- 保存应用名、窗口标题、原始位置和槽位号
+            table.insert(state, {
+                slotIndex = i,
+                appName = slot.appName,
+                winTitle = slot.win:title(),
+                originalFrame = {
+                    x = slot.originalFrame.x,
+                    y = slot.originalFrame.y,
+                    w = slot.originalFrame.w,
+                    h = slot.originalFrame.h
+                }
+            })
+        end
+    end
+    
+    local file = io.open(EDGEDOCK_STATE_FILE, "w")
+    if file then
+        file:write(hs.json.encode(state))
+        file:close()
+        print("[EdgeDock] 状态已保存: " .. #state .. " 个窗口")
+    end
+end
+
+-- 从文件恢复 Edge Dock 状态
+function EdgeDock.restoreState()
+    local file = io.open(EDGEDOCK_STATE_FILE, "r")
+    if not file then
+        print("[EdgeDock] 没有找到状态文件")
+        return
+    end
+    
+    local content = file:read("*all")
+    file:close()
+    
+    local state = hs.json.decode(content)
+    if not state or #state == 0 then
+        print("[EdgeDock] 状态文件为空")
+        return
+    end
+    
+    -- 延迟恢复，等待应用启动
+    hs.timer.doAfter(2, function()
+        local restoredCount = 0
+        
+        for _, item in ipairs(state) do
+            -- 查找应用
+            local app = hs.application.get(item.appName)
+            if not app then
+                -- 尝试启动应用
+                print("[EdgeDock] 尝试启动应用: " .. item.appName)
+                hs.application.launchOrFocus(item.appName)
+                -- 等待应用启动
+                hs.timer.usleep(500000) -- 500ms
+                app = hs.application.get(item.appName)
+            end
+            
+            if app then
+                -- 查找匹配的窗口
+                local targetWin = nil
+                local windows = app:allWindows()
+                
+                for _, win in ipairs(windows) do
+                    if win:isStandard() then
+                        -- 优先匹配标题
+                        if win:title() == item.winTitle then
+                            targetWin = win
+                            break
+                        end
+                        -- 备选：如果没有标题匹配，取第一个标准窗口
+                        if not targetWin then
+                            targetWin = win
+                        end
+                    end
+                end
+                
+                if targetWin then
+                    -- 恢复 originalFrame
+                    local frame = hs.geometry.rect(
+                        item.originalFrame.x,
+                        item.originalFrame.y,
+                        item.originalFrame.w,
+                        item.originalFrame.h
+                    )
+                    
+                    -- 使用主屏幕（和小条一致）
+                    local screen = hs.screen.mainScreen():frame()
+                    
+                    -- 获取槽位位置
+                    local sx, sy, sw, sh = EdgeDock.getSlotPosition(item.slotIndex)
+                    
+                    -- 计算窗口在槽位区域内的垂直居中位置
+                    local winY = sy + (sh - frame.h) / 2
+                    if winY < screen.y then
+                        winY = screen.y
+                    end
+                    if winY + frame.h > screen.y + screen.h then
+                        winY = screen.y + screen.h - frame.h
+                    end
+                    
+                    -- 保存到槽位
+                    EdgeDock.slots[item.slotIndex] = {
+                        win = targetWin,
+                        winId = targetWin:id(),
+                        originalFrame = frame,
+                        appName = item.appName,
+                        isShowing = false,
+                        hideTimer = nil,
+                        slotY = sy,
+                        slotHeight = sh,
+                        winY = winY,
+                    }
+                    
+                    -- 隐藏窗口到屏幕右下角
+                    local hideX = screen.x + screen.w - 1
+                    local hideY = screen.y + screen.h - 1
+                    setWinFrame(targetWin, hs.geometry.rect(hideX, hideY, frame.w, frame.h))
+                    
+                    restoredCount = restoredCount + 1
+                    print("[EdgeDock] 恢复槽位 " .. item.slotIndex .. ": " .. item.appName)
+                else
+                    print("[EdgeDock] 未找到窗口: " .. item.appName)
+                end
+            else
+                print("[EdgeDock] 应用未运行: " .. item.appName)
+            end
+        end
+        
+        -- 刷新小条显示
+        EdgeDock.refreshBars()
+        
+        if restoredCount > 0 then
+            notify("Edge Dock", "已恢复 " .. restoredCount .. " 个窗口")
+        end
+    end)
+end
+
 -- 高亮小条（拖拽提示）
 function EdgeDock.highlightBar(slotIndex, highlight)
     local bar = EdgeDock.bars[slotIndex]
@@ -1084,6 +1229,7 @@ function EdgeDock.dockWindow(win, slotIndex)
     setWinFrame(win, hs.geometry.rect(hideX, hideY, frame.w, frame.h))
     
     EdgeDock.refreshBars()
+    EdgeDock.saveState()  -- 保存状态
     notify("Edge Dock", "已停靠到槽位 " .. slotIndex)
     return true
 end
@@ -1187,6 +1333,7 @@ function EdgeDock.undockWindow(slotIndex, focus)
     
     EdgeDock.slots[slotIndex] = nil
     EdgeDock.refreshBars()
+    EdgeDock.saveState()  -- 保存状态
     
     if focus then
         notify("Edge Dock", "窗口已恢复")
@@ -1348,10 +1495,16 @@ function EdgeDock.start()
     -- 先恢复可能被之前实例藏起来的窗口
     EdgeDock.recoverHiddenWindows()
     
+    -- 初始化小条
     EdgeDock.refreshBars()
+    
+    -- 启动监听器
     EdgeDock.mouseWatcher:start()
     EdgeDock.appWatcher:start()
     EdgeDock.screenWatcher:start()
+    
+    -- 从文件恢复状态
+    EdgeDock.restoreState()
 end
 
 -- 停止
