@@ -693,6 +693,199 @@ local EdgeDock = {
     }
 }
 
+-- 缓存应用颜色
+EdgeDock.appColorCache = {}
+
+-- 常用应用颜色表（基于实际图标）
+EdgeDock.knownAppColors = {
+    ["WeChat"]  = {red = 0.35, green = 0.55, blue = 0.40}, -- 去饱和微信绿
+    ["ChatGPT"] = {red = 0.75, green = 0.75, blue = 0.75}, -- 浅灰
+    ["Music"]   = {red = 0.55, green = 0.32, blue = 0.38}, -- 灰玫红
+    ["Kimi"]    = {red = 0.45, green = 0.50, blue = 0.65}, -- 灰蓝
+    ["Safari"] = {red = 0.15, green = 0.55, blue = 0.95},      -- Safari 蓝
+    ["Chrome"] = {red = 0.95, green = 0.35, blue = 0.15},      -- Chrome 红/黄/绿/蓝 - 主要用红色
+    ["Code"] = {red = 0.15, green = 0.45, blue = 0.75},        -- VS Code 蓝
+    ["Terminal"] = {red = 0.25, green = 0.25, blue = 0.25},    -- 终端黑
+    ["Steam"] = {red = 0.15, green = 0.25, blue = 0.45},       -- Steam 深蓝
+}
+
+-- 获取应用图标的平均颜色
+function EdgeDock.getAppIconColor(appName)
+    -- 检查缓存
+    if EdgeDock.appColorCache[appName] then
+        return EdgeDock.appColorCache[appName]
+    end
+    
+    -- 1. 先检查已知应用颜色表
+    if EdgeDock.knownAppColors[appName] then
+        local color = EdgeDock.brightenColor(EdgeDock.knownAppColors[appName], 1.3)
+        color.alpha = 0.8
+        EdgeDock.appColorCache[appName] = color
+        return color
+    end
+    
+    -- 2. 尝试获取应用的实际图标
+    local app = hs.application.get(appName)
+    if not app then 
+        return EdgeDock.generateColorFromName(appName)
+    end
+    
+    -- 安全获取图标
+    local success, icon = pcall(function() return app:icon() end)
+    if not success or not icon then 
+        return EdgeDock.generateColorFromName(appName)
+    end
+    
+    -- 3. 尝试通过 bundle 路径获取图标文件
+    local bundlePath = app:path()
+    if bundlePath then
+        local color = EdgeDock.extractColorFromIconBundle(bundlePath)
+        if color then
+            EdgeDock.appColorCache[appName] = color
+            return color
+        end
+    end
+    
+    -- 4. 备选：使用名称生成颜色
+    local color = EdgeDock.generateColorFromName(appName)
+    color.alpha = 0.3
+    EdgeDock.appColorCache[appName] = color
+    return color
+end
+
+-- 从应用 bundle 提取图标颜色
+function EdgeDock.extractColorFromIconBundle(bundlePath)
+    -- 查找 .icns 文件
+    local iconPath = nil
+    
+    -- 先尝试读取 Info.plist 中的 CFBundleIconFile
+    local plistCmd = "defaults read '" .. bundlePath .. "/Contents/Info' CFBundleIconFile 2>/dev/null"
+    local handle = io.popen(plistCmd)
+    local iconFile = handle and handle:read("*l")
+    if handle then handle:close() end
+    
+    if iconFile then
+        iconFile = iconFile:gsub("^%s*", ""):gsub("%s*$", ""):gsub("^\"", ""):gsub("\"$", "")
+        iconFile = iconFile:gsub("%.icns$", "")
+        
+        -- 尝试多个可能的路径
+        local paths = {
+            bundlePath .. "/Contents/Resources/" .. iconFile .. ".icns",
+            bundlePath .. "/Contents/Resources/" .. iconFile,
+        }
+        for _, p in ipairs(paths) do
+            local f = io.open(p, "r")
+            if f then f:close() iconPath = p break end
+        end
+    end
+    
+    -- 如果没找到，查找 Resources 目录下的任意 .icns
+    if not iconPath then
+        local findCmd = "find '" .. bundlePath .. "/Contents/Resources' -name '*.icns' -type f 2>/dev/null | head -1"
+        local findHandle = io.popen(findCmd)
+        iconPath = findHandle and findHandle:read("*l")
+        if findHandle then findHandle:close() end
+    end
+    
+    if not iconPath then return nil end
+    
+    -- 使用 sips 提取颜色直方图的主要颜色
+    -- 方法：转换为小的位图然后采样几个像素
+    local tmpFile = os.tmpname()
+    
+    -- 提取第一个图标并缩放到 1x1 来获取平均颜色（但这样太模糊了）
+    -- 更好的方法：提取到 4x4 然后分析
+    local cmd = "sips -s format png '" .. iconPath .. "' -o '" .. tmpFile .. "' --resampleWidth 4 2>/dev/null"
+    os.execute(cmd)
+    
+    -- 读取 PNG 文件并解析（简化：直接读取文件找颜色特征）
+    local f = io.open(tmpFile, "rb")
+    local color = nil
+    
+    if f then
+        local data = f:read("*all")
+        f:close()
+        
+        -- 简单启发式：在 PNG 数据中寻找最常见的非透明颜色
+        -- PNG 的 IDAT 块包含压缩后的像素数据
+        -- 我们采样几个固定位置的字节
+        if data and #data > 100 then
+            -- 跳过 PNG 头部，采样数据区的一些字节
+            local samples = {}
+            for i = 100, math.min(#data - 3, 500), 10 do
+                local r = string.byte(data, i)
+                local g = string.byte(data, i + 1)
+                local b = string.byte(data, i + 2)
+                -- 过滤掉极端值
+                if r and g and b and (r+g+b) > 50 and (r+g+b) < 720 then
+                    table.insert(samples, {r=r, g=g, b=b})
+                end
+            end
+            
+            if #samples > 0 then
+                local tr, tg, tb = 0, 0, 0
+                for _, s in ipairs(samples) do
+                    tr = tr + s.r
+                    tg = tg + s.g
+                    tb = tb + s.b
+                end
+                color = {
+                    red = math.min(1, (tr / #samples / 255) * 1.4),
+                    green = math.min(1, (tg / #samples / 255) * 1.4),
+                    blue = math.min(1, (tb / #samples / 255) * 1.4),
+                    alpha = 0.9
+                }
+            end
+        end
+    end
+    
+    os.remove(tmpFile)
+    return color
+end
+
+-- 根据应用名生成稳定颜色（备选方案）
+function EdgeDock.generateColorFromName(appName)
+    local hash = 0
+    for i = 1, #appName do
+        hash = hash + string.byte(appName, i) * i * 31
+    end
+    hash = hash % 360
+    
+    -- HSL to RGB
+    local hue = hash / 360
+    local s, l = 0.75, 0.6
+    
+    local function hue2rgb(p, q, t)
+        if t < 0 then t = t + 1 end
+        if t > 1 then t = t - 1 end
+        if t < 1/6 then return p + (q - p) * 6 * t end
+        if t < 1/2 then return q end
+        if t < 2/3 then return p + (q - p) * (2/3 - t) * 6 end
+        return p
+    end
+    
+    local q = l < 0.5 and l * (1 + s) or l + s - l * s
+    local p = 2 * l - q
+    
+    return {
+        red = hue2rgb(p, q, hue + 1/3),
+        green = hue2rgb(p, q, hue),
+        blue = hue2rgb(p, q, hue - 1/3),
+        alpha = 0.9
+    }
+end
+
+-- 亮度增加函数
+function EdgeDock.brightenColor(color, factor)
+    factor = factor or 1.3
+    return {
+        red = math.min(1, color.red * factor),
+        green = math.min(1, color.green * factor),
+        blue = math.min(1, color.blue * factor),
+        alpha = color.alpha
+    }
+end
+
 -- 获取槽位位置（带空隙，垂直居中分布）
 function EdgeDock.getSlotPosition(slotIndex)
     local screen = hs.screen.mainScreen():frame()
@@ -735,27 +928,23 @@ function EdgeDock.refreshBars()
         local bar = hs.canvas.new({x = x, y = y, w = w, h = h})
         
         if slot then
-            -- 有窗口 - 彩色条 + 应用首字母
+            -- 有窗口 - 应用图标颜色（增量后的鲜艳颜色）
+            local iconColor = EdgeDock.getAppIconColor(slot.appName) or {alpha = 0.85, red = 0.5, green = 0.5, blue = 0.5}
+            local brightColor = EdgeDock.brightenColor(iconColor, 1.25)
+            
             bar:appendElements({
                 type = "rectangle",
                 action = "fill",
-                fillColor = {alpha = 0.3, red = 1, green = 1, blue = 1},
+                fillColor = brightColor,
                 roundedRectRadii = {xRadius = 4, yRadius = 4},
             })
-            bar:appendElements({
-                type = "text",
-                text = string.upper(string.sub(slot.appName, 1, 1)),
-                textSize = 14,
-                textColor = {alpha = 0, red = 0, green = 0, blue = 0},
-                frame = {x = 0, y = h/2 - 10, w = w, h = 20},
-                textAlignment = "center",
-            })
+            -- 不显示文字，只用颜色标识应用
         else
             -- 空槽位 - 暗色条 + 编号
             bar:appendElements({
                 type = "rectangle",
                 action = "fill",
-                fillColor = {alpha = 0.2, red = 0.3, green = 0.3, blue = 0.3},
+                fillColor = {alpha = 0.3, red = 0.3, green = 0.3, blue = 0.3},
                 roundedRectRadii = {xRadius = 4, yRadius = 4},
             })
             -- bar:appendElements({
