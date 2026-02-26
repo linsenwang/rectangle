@@ -158,12 +158,23 @@ hs.hotkey.bind(mash, "right", function()
     local area = getUsableArea(max)
     local frame = win:frame()
     
-    -- 检查是否已经在右侧且宽度是半屏系列
-    local isRightSide = approx(frame.x + frame.w, max.x + max.w, 5) or 
-                        approx(frame.x + frame.w, max.x + max.w - margin.right, 10)
-    local isHalfWidth = approx(frame.w, area.w * 0.5, 50) or 
-                        approx(frame.w, area.w * 2/3, 50) or
-                        approx(frame.w, area.w * 5/6, 50)
+    -- 计算可用宽度
+    local usableW = max.w - margin.left - margin.inner - margin.right
+    local rightEdge = max.x + max.w - margin.right
+    -- 右半屏三个档位的 x 坐标位置
+    local rightXPositions = {
+        rightEdge - usableW * 0.5,   -- 第一档
+        rightEdge - usableW * 2/3,   -- 第二档
+        rightEdge - usableW * 5/6,   -- 第三档
+    }
+    
+    -- 检查是否已经在右侧（x 坐标匹配任意一档）且宽度是半屏系列
+    local isRightSide = approx(frame.x, rightXPositions[1], 30) or
+                        approx(frame.x, rightXPositions[2], 30) or
+                        approx(frame.x, rightXPositions[3], 30)
+    local isHalfWidth = approx(frame.w, usableW * 0.5, 50) or 
+                        approx(frame.w, usableW * 2/3, 50) or
+                        approx(frame.w, usableW * 5/6, 50)
     
     if isRightSide and isHalfWidth then
         -- 已经在右半屏，启用循环：1/2 -> 2/3 -> 5/6
@@ -175,15 +186,17 @@ hs.hotkey.bind(mash, "right", function()
         -- 计算可用宽度：屏幕宽 - 左距 - 中间距 - 右距
         local usableW = max.w - margin.left - margin.inner - margin.right
         local width = usableW * widths[state]
-        local leftWidth = usableW * widths[state]  -- 假设左窗口同比例
-        local x = max.x + margin.left + leftWidth + margin.inner
+        -- 右边缘对齐：从屏幕右边缘减去 margin.right 往左延伸
+        local rightEdge = max.x + max.w - margin.right
+        local x = rightEdge - width
         setWinFrame(win, hs.geometry.rect(x, area.y, width, area.h))
     else
         -- 不在右半屏，先设为右 1/2，与左窗口对称
         cycleState[id] = 1
         local usableW = max.w - margin.left - margin.inner - margin.right
         local width = usableW * 0.5
-        local x = max.x + margin.left + width + margin.inner
+        local rightEdge = max.x + max.w - margin.right
+        local x = rightEdge - width
         setWinFrame(win, hs.geometry.rect(x, area.y, width, area.h))
     end
 end)
