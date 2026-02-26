@@ -134,14 +134,16 @@ hs.hotkey.bind(mash, "left", function()
         if state > 3 then state = 1 end
         cycleState[id] = state
         local widths = {0.5, 2/3, 5/6}
-        -- 扣除中间边距后计算实际宽度
-        local width = area.w * widths[state] - margin.inner * widths[state] / 2
-        setWinFrame(win, hs.geometry.rect(area.x, area.y, width, area.h))
+        -- 计算可用宽度：屏幕宽 - 左距 - 中间距 - 右距
+        local usableW = max.w - margin.left - margin.inner - margin.right
+        local width = usableW * widths[state]
+        setWinFrame(win, hs.geometry.rect(max.x + margin.left, area.y, width, area.h))
     else
         -- 不在左半屏，先设为 1/2，重置循环
         cycleState[id] = 1
-        local width = area.w * 0.5 - margin.inner / 2
-        setWinFrame(win, hs.geometry.rect(area.x, area.y, width, area.h))
+        local usableW = max.w - margin.left - margin.inner - margin.right
+        local width = usableW * 0.5
+        setWinFrame(win, hs.geometry.rect(max.x + margin.left, area.y, width, area.h))
     end
 end)
 
@@ -170,15 +172,18 @@ hs.hotkey.bind(mash, "right", function()
         if state > 3 then state = 1 end
         cycleState[id] = state
         local widths = {0.5, 2/3, 5/6}
-        -- 扣除中间边距后计算实际宽度
-        local width = area.w * widths[state] - margin.inner * widths[state] / 2
-        local x = area.x + area.w - width
+        -- 计算可用宽度：屏幕宽 - 左距 - 中间距 - 右距
+        local usableW = max.w - margin.left - margin.inner - margin.right
+        local width = usableW * widths[state]
+        local leftWidth = usableW * widths[state]  -- 假设左窗口同比例
+        local x = max.x + margin.left + leftWidth + margin.inner
         setWinFrame(win, hs.geometry.rect(x, area.y, width, area.h))
     else
-        -- 不在右半屏，先设为右 1/2，重置循环
+        -- 不在右半屏，先设为右 1/2，与左窗口对称
         cycleState[id] = 1
-        local width = area.w * 0.5 - margin.inner / 2
-        local x = area.x + area.w - width
+        local usableW = max.w - margin.left - margin.inner - margin.right
+        local width = usableW * 0.5
+        local x = max.x + margin.left + width + margin.inner
         setWinFrame(win, hs.geometry.rect(x, area.y, width, area.h))
     end
 end)
@@ -712,7 +717,6 @@ EdgeDock.knownAppColors = {
     ["Chrome"] = {red = 0.95, green = 0.35, blue = 0.15},      -- Chrome 红/黄/绿/蓝 - 主要用红色
     ["Code"] = {red = 0.15, green = 0.45, blue = 0.75},        -- VS Code 蓝
     ["Terminal"] = {red = 0.25, green = 0.25, blue = 0.25},    -- 终端黑
-    ["Steam"] = {red = 0.15, green = 0.25, blue = 0.45},       -- Steam 深蓝
 }
 
 -- 获取应用图标的平均颜色
@@ -725,7 +729,7 @@ function EdgeDock.getAppIconColor(appName)
     -- 1. 先检查已知应用颜色表
     if EdgeDock.knownAppColors[appName] then
         local color = EdgeDock.brightenColor(EdgeDock.knownAppColors[appName], 1.3)
-        color.alpha = 1
+        color.alpha = 0.6
         EdgeDock.appColorCache[appName] = color
         return color
     end
