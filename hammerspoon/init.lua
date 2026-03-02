@@ -712,7 +712,7 @@ local EdgeDock = {
         bottomMargin = 6, -- 底部边距（距离屏幕下边缘）
         barGap = 10,        -- 小条之间的空隙
         peekWidth = 1,      -- 窗口 peek 出来的宽度
-        hideDelay = 0,      -- 鼠标离开后多久收起（秒）
+        hideDelay = 0.5,      -- 鼠标离开后多久收起（秒）
         dragThreshold = 10, -- 拖拽检测阈值（像素）
     }
 }
@@ -960,6 +960,27 @@ function EdgeDock.refreshMask()
     EdgeDock.mask:show()
 end
 
+-- 验证槽位窗口是否仍然有效，无效则清理
+function EdgeDock.validateSlot(slotIndex)
+    local slot = EdgeDock.slots[slotIndex]
+    if not slot then return nil end
+    
+    -- 尝试通过 winId 重新获取窗口对象
+    if slot.winId then
+        local win = hs.window.get(slot.winId)
+        if win and win:isStandard() then
+            -- 窗口仍然有效，更新引用
+            slot.win = win
+            return slot
+        end
+    end
+    
+    -- 窗口已失效，清理槽位
+    print("[EdgeDock] 槽位 " .. slotIndex .. " 窗口失效，清理槽位")
+    EdgeDock.slots[slotIndex] = nil
+    return nil
+end
+
 -- 创建/刷新所有小条
 function EdgeDock.refreshBars()
     -- 清理旧的
@@ -970,7 +991,9 @@ function EdgeDock.refreshBars()
     
     for i = 1, EdgeDock.config.maxSlots do
         local x, y, w, h = EdgeDock.getSlotPosition(i)
-        local slot = EdgeDock.slots[i]
+        
+        -- 验证槽位有效性
+        local slot = EdgeDock.validateSlot(i)
         
         local bar = hs.canvas.new({x = x, y = y, w = w, h = h})
         
@@ -1012,6 +1035,9 @@ function EdgeDock.refreshBars()
             slotIndex = i,
         })
     end
+    
+    -- 如果有槽位被清理，保存状态
+    EdgeDock.saveState()
 end
 
 -- 保存 Edge Dock 状态到文件
@@ -1019,12 +1045,17 @@ function EdgeDock.saveState()
     local state = {}
     for i = 1, EdgeDock.config.maxSlots do
         local slot = EdgeDock.slots[i]
-        if slot and slot.win and slot.win:isStandard() then
+        -- 使用 winId 验证窗口有效性
+        local win = nil
+        if slot and slot.winId then
+            win = hs.window.get(slot.winId)
+        end
+        if win and win:isStandard() then
             -- 保存应用名、窗口标题、原始位置和槽位号
             table.insert(state, {
                 slotIndex = i,
                 appName = slot.appName,
-                winTitle = slot.win:title(),
+                winTitle = win:title(),
                 originalFrame = {
                     x = slot.originalFrame.x,
                     y = slot.originalFrame.y,
@@ -1284,12 +1315,20 @@ function EdgeDock.peekWindow(slotIndex)
     local slot = EdgeDock.slots[slotIndex]
     if not slot then return end
     
-    local win = slot.win
+    -- 验证窗口有效性
+    local win = nil
+    if slot.winId then
+        win = hs.window.get(slot.winId)
+    end
     if not win or not win:isStandard() then
+        print("[EdgeDock] 槽位 " .. slotIndex .. " 窗口已失效")
         EdgeDock.slots[slotIndex] = nil
         EdgeDock.refreshBars()
+        EdgeDock.saveState()
         return
     end
+    -- 更新窗口引用
+    slot.win = win
     
     print(string.format("[EdgeDock] 显示槽位%d, winY=%.0f", slotIndex, slot.winY))
     
@@ -1344,12 +1383,20 @@ function EdgeDock.hideWindow(slotIndex)
     local slot = EdgeDock.slots[slotIndex]
     if not slot then return end
     
-    local win = slot.win
+    -- 验证窗口有效性
+    local win = nil
+    if slot.winId then
+        win = hs.window.get(slot.winId)
+    end
     if not win or not win:isStandard() then
+        print("[EdgeDock] 槽位 " .. slotIndex .. " 窗口已失效")
         EdgeDock.slots[slotIndex] = nil
         EdgeDock.refreshBars()
+        EdgeDock.saveState()
         return
     end
+    -- 更新窗口引用
+    slot.win = win
     
     -- 移到屏幕右下角（只露出1x1像素，保持原尺寸）
     local screen = hs.screen.mainScreen():frame()
@@ -1370,10 +1417,16 @@ function EdgeDock.undockWindow(slotIndex, focus)
         slot.hideTimer:stop()
     end
     
-    local win = slot.win
+    -- 验证窗口有效性
+    local win = nil
+    if slot.winId then
+        win = hs.window.get(slot.winId)
+    end
     if win and win:isStandard() then
         setWinFrame(win, slot.originalFrame)
         if focus then win:focus() end
+    else
+        print("[EdgeDock] 恢复时窗口已失效: " .. (slot.appName or "unknown"))
     end
     
     EdgeDock.slots[slotIndex] = nil
@@ -1442,11 +1495,21 @@ EdgeDock.appWatcher = hs.application.watcher.new(function(appName, eventType, ap
         hs.timer.doAfter(0.5, function()
             for i = 1, EdgeDock.config.maxSlots do
                 local slot = EdgeDock.slots[i]
-                if slot and (not slot.win or not slot.win:isStandard()) then
+                -- 使用 winId 验证窗口有效性
+                local win = nil
+                if slot and slot.winId then
+                    win = hs.window.get(slot.winId)
+                end
+                if not win or not win:isStandard() then
+                    print("[EdgeDock] 应用关闭，清理槽位 " .. i)
                     EdgeDock.slots[i] = nil
+                else
+                    -- 更新窗口引用
+                    slot.win = win
                 end
             end
             EdgeDock.refreshBars()
+            EdgeDock.saveState()
         end)
     end
 end)
@@ -1457,6 +1520,25 @@ EdgeDock.screenWatcher = hs.screen.watcher.new(function()
         EdgeDock.refreshBars()
         EdgeDock.refreshMask()
     end)
+end)
+
+-- 系统休眠/唤醒监听
+EdgeDock.caffeinateWatcher = hs.caffeinate.watcher.new(function(eventType)
+    if eventType == hs.caffeinate.watcher.systemDidWake then
+        print("[EdgeDock] 系统唤醒，刷新小条")
+        hs.timer.doAfter(1, function()
+            -- 唤醒后强制验证所有槽位并刷新
+            for i = 1, EdgeDock.config.maxSlots do
+                EdgeDock.validateSlot(i)
+            end
+            EdgeDock.refreshBars()
+            EdgeDock.refreshMask()
+            EdgeDock.saveState()
+        end)
+    elseif eventType == hs.caffeinate.watcher.systemWillSleep then
+        print("[EdgeDock] 系统即将休眠，保存状态")
+        EdgeDock.saveState()
+    end
 end)
 
 -- ============================================
@@ -1549,6 +1631,7 @@ function EdgeDock.start()
     EdgeDock.mouseWatcher:start()
     EdgeDock.appWatcher:start()
     EdgeDock.screenWatcher:start()
+    EdgeDock.caffeinateWatcher:start()
     
     -- 从文件恢复状态
     EdgeDock.restoreState()
@@ -1568,6 +1651,7 @@ function EdgeDock.stop()
     EdgeDock.mouseWatcher:stop()
     EdgeDock.appWatcher:stop()
     EdgeDock.screenWatcher:stop()
+    EdgeDock.caffeinateWatcher:stop()
 end
 
 -- 快捷键：停靠到槽位 1-5 (Ctrl+Opt+数字)
