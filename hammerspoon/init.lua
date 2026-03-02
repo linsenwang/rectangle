@@ -712,38 +712,138 @@ local EdgeDock = {
         bottomMargin = 6, -- 底部边距（距离屏幕下边缘）
         barGap = 10,        -- 小条之间的空隙
         peekWidth = 1,      -- 窗口 peek 出来的宽度
-        hideDelay = 0.5,      -- 鼠标离开后多久收起（秒）
+        hideDelay = 0,      -- 鼠标离开后多久收起（秒）
         dragThreshold = 10, -- 拖拽检测阈值（像素）
+        -- 深色/浅色模式颜色配置
+        colors = {
+            dark = {
+                emptyBar = {alpha = 0.3, red = 0.3, green = 0.3, blue = 0.3},      -- 空槽位颜色
+                emptyText = {alpha = 0, red = 1, green = 1, blue = 1},           -- 空槽位文字颜色
+                highlightOccupied = {alpha = 0.9, red = 0.3, green = 0.7, blue = 1.0},  -- 高亮-有窗口
+                highlightEmpty = {alpha = 0.6, red = 0.5, green = 0.5, blue = 0.5},     -- 高亮-空槽位
+                highlightText = {alpha = 1, red = 1, green = 1, blue = 1},          -- 高亮文字颜色
+                normalOccupiedText = {alpha = 1, red = 0, green = 0, blue = 0},     -- 正常-有窗口文字
+                mask = {alpha = 1, red = 0, green = 0, blue = 0},                   -- 遮罩条颜色
+            },
+            light = {
+                emptyBar = {alpha = 0.2, red = 0.7, green = 0.7, blue = 0.7},      -- 空槽位颜色（浅灰）
+                emptyText = {alpha = 0, red = 0.3, green = 0.3, blue = 0.3},      -- 空槽位文字颜色（深灰）
+                highlightOccupied = {alpha = 0.9, red = 0.2, green = 0.5, blue = 0.9},  -- 高亮-有窗口（深蓝）
+                highlightEmpty = {alpha = 0.5, red = 0.6, green = 0.6, blue = 0.6},     -- 高亮-空槽位
+                highlightText = {alpha = 1, red = 1, green = 1, blue = 1},          -- 高亮文字颜色
+                normalOccupiedText = {alpha = 1, red = 1, green = 1, blue = 1},     -- 正常-有窗口文字（浅色模式用白色）
+                mask = {alpha = 1, red = 0, green = 0, blue = 0},                   -- 遮罩条颜色
+            }
+        }
     }
 }
 
 -- 缓存应用颜色
 EdgeDock.appColorCache = {}
 
--- 常用应用颜色表（基于实际图标）
+-- 检测当前外观模式（深色/浅色）
+function EdgeDock.getAppearanceMode()
+    local success, result = pcall(function()
+        local handle = io.popen("defaults read -g AppleInterfaceStyle 2>/dev/null")
+        if handle then
+            local output = handle:read("*a")
+            handle:close()
+            if output and output:match("Dark") then
+                return "dark"
+            end
+        end
+        return "light"
+    end)
+    return success and result or "light"
+end
+
+-- 获取当前模式的颜色配置
+function EdgeDock.getCurrentColors()
+    local mode = EdgeDock.getAppearanceMode()
+    return EdgeDock.config.colors[mode] or EdgeDock.config.colors.dark
+end
+
+-- 常用应用颜色表（支持深色/浅色模式）
+-- 如果不指定某个模式，则回退到另一个模式
 EdgeDock.knownAppColors = {
-    ["WeChat"]  = {red = 0.35, green = 0.55, blue = 0.40}, -- 去饱和微信绿
-    ["ChatGPT"] = {red = 0.5, green = 0.5, blue = 0.5}, -- 浅灰
-    ["Music"]   = {red = 0.55, green = 0.32, blue = 0.38}, -- 灰玫红
-    ["Kimi"]    = {red = 0.45, green = 0.50, blue = 0.65}, -- 灰蓝
-    ["Safari"] = {red = 0.15, green = 0.55, blue = 0.95},      -- Safari 蓝
-    ["Chrome"] = {red = 0.95, green = 0.35, blue = 0.15},      -- Chrome 红/黄/绿/蓝 - 主要用红色
-    ["Code"] = {red = 0.15, green = 0.45, blue = 0.75},        -- VS Code 蓝
-    ["Terminal"] = {red = 0.25, green = 0.25, blue = 0.25},    -- 终端黑
+    ["WeChat"] = {
+        dark  = {red = 0.40, green = 0.65, blue = 0.45},
+        light = {red = 0.25, green = 0.45, blue = 0.30}, -- 更深
+    },
+    ["ChatGPT"] = {
+        dark  = {red = 0.65, green = 0.65, blue = 0.65},
+        light = {red = 0.18, green = 0.18, blue = 0.18}, -- 接近石墨灰
+    },
+    ["Music"] = {
+        dark  = {red = 0.90, green = 0.30, blue = 0.50},
+        light = {red = 0.45, green = 0.18, blue = 0.28}, -- 压暗
+    },
+    ["Kimi"] = {
+        dark  = {red = 0.55, green = 0.60, blue = 0.80},
+        light = {red = 0.28, green = 0.38, blue = 0.60}, -- 更深蓝
+    },
+    ["Safari"] = {
+        dark  = {red = 0.25, green = 0.65, blue = 1.00},
+        light = {red = 0.05, green = 0.38, blue = 0.80}, -- 更沉
+    },
+    ["Chrome"] = {
+        dark  = {red = 1.00, green = 0.40, blue = 0.20},
+        light = {red = 0.65, green = 0.18, blue = 0.05}, -- 深红橙
+    },
+    ["Code"] = {
+        dark  = {red = 0.25, green = 0.55, blue = 0.95},
+        light = {red = 0.05, green = 0.30, blue = 0.60}, -- 深蓝
+    },
+    ["Terminal"] = {
+        dark  = {red = 0.70, green = 0.70, blue = 0.70},
+        light = {red = 0.12, green = 0.12, blue = 0.12}, -- 更深黑灰
+    },
 }
+
+-- 获取应用在当前模式下的颜色
+function EdgeDock.getKnownAppColor(appName)
+    local colorEntry = EdgeDock.knownAppColors[appName]
+    if not colorEntry then
+        return nil
+    end
+    
+    local mode = EdgeDock.getAppearanceMode()
+    local color = nil
+    
+    -- 优先返回当前模式的颜色
+    if colorEntry[mode] then
+        color = colorEntry[mode]
+    elseif mode == "dark" and colorEntry.light then
+        -- 深色模式回退到浅色
+        color = colorEntry.light
+    elseif mode == "light" and colorEntry.dark then
+        -- 浅色模式回退到深色
+        color = colorEntry.dark
+    else
+        -- 都没有的话返回第一个可用的
+        color = colorEntry.dark or colorEntry.light
+    end
+    
+    return color
+end
 
 -- 获取应用图标的平均颜色
 function EdgeDock.getAppIconColor(appName)
+    -- 获取当前模式用于缓存键
+    local mode = EdgeDock.getAppearanceMode()
+    local cacheKey = appName .. "_" .. mode
+    
     -- 检查缓存
-    if EdgeDock.appColorCache[appName] then
-        return EdgeDock.appColorCache[appName]
+    if EdgeDock.appColorCache[cacheKey] then
+        return EdgeDock.appColorCache[cacheKey]
     end
     
-    -- 1. 先检查已知应用颜色表
-    if EdgeDock.knownAppColors[appName] then
-        local color = EdgeDock.brightenColor(EdgeDock.knownAppColors[appName], 1.3)
-        color.alpha = 0.6
-        EdgeDock.appColorCache[appName] = color
+    -- 1. 先检查已知应用颜色表（支持深浅模式）
+    local knownColor = EdgeDock.getKnownAppColor(appName)
+    if knownColor then
+        local color = EdgeDock.brightenColor(knownColor, 1.3)
+        color.alpha = 0.85
+        EdgeDock.appColorCache[cacheKey] = color
         return color
     end
     
@@ -764,7 +864,7 @@ function EdgeDock.getAppIconColor(appName)
     if bundlePath then
         local color = EdgeDock.extractColorFromIconBundle(bundlePath)
         if color then
-            EdgeDock.appColorCache[appName] = color
+            EdgeDock.appColorCache[cacheKey] = color
             return color
         end
     end
@@ -772,7 +872,7 @@ function EdgeDock.getAppIconColor(appName)
     -- 4. 备选：使用名称生成颜色
     local color = EdgeDock.generateColorFromName(appName)
     color.alpha = 0.3
-    EdgeDock.appColorCache[appName] = color
+    EdgeDock.appColorCache[cacheKey] = color
     return color
 end
 
@@ -943,18 +1043,22 @@ function EdgeDock.isPointInWindow(mouseX, mouseY, win)
            and mouseY >= frame.y and mouseY <= frame.y + frame.h
 end
 
--- 创建/刷新右侧遮罩条（2px宽黑色，遮挡可能被推出的窗口边缘）
+-- 创建/刷新右侧遮罩条（2px宽，遮挡可能被推出的窗口边缘）
 function EdgeDock.refreshMask()
     if EdgeDock.mask then
         EdgeDock.mask:delete()
     end
+    
+    -- 获取当前模式的颜色
+    local colors = EdgeDock.getCurrentColors()
+    
     local screen = hs.screen.mainScreen():frame()
-    -- 2px宽，全屏高，纯黑，放在最右侧
+    -- 2px宽，全屏高，放在最右侧
     EdgeDock.mask = hs.canvas.new({x = screen.x + screen.w - 2, y = screen.y, w = 2, h = screen.h})
     EdgeDock.mask:appendElements({
         type = "rectangle",
         action = "fill",
-        fillColor = {alpha = 1, red = 0, green = 0, blue = 0},
+        fillColor = colors.mask,
     })
     EdgeDock.mask:level(hs.canvas.windowLevels.overlay)
     EdgeDock.mask:show()
@@ -989,6 +1093,9 @@ function EdgeDock.refreshBars()
     end
     EdgeDock.bars = {}
     
+    -- 获取当前模式的颜色
+    local colors = EdgeDock.getCurrentColors()
+    
     for i = 1, EdgeDock.config.maxSlots do
         local x, y, w, h = EdgeDock.getSlotPosition(i)
         
@@ -1010,18 +1117,18 @@ function EdgeDock.refreshBars()
             })
             -- 不显示文字，只用颜色标识应用
         else
-            -- 空槽位 - 暗色条 + 编号
+            -- 空槽位 - 使用当前模式的颜色
             bar:appendElements({
                 type = "rectangle",
                 action = "fill",
-                fillColor = {alpha = 0.3, red = 0.3, green = 0.3, blue = 0.3},
+                fillColor = colors.emptyBar,
                 roundedRectRadii = {xRadius = 4, yRadius = 4},
             })
             -- bar:appendElements({
             --     type = "text",
             --     text = tostring(i),
             --     textSize = 11,
-            --     textColor = {alpha = 0.4, red = 1, green = 1, blue = 1},
+            --     textColor = colors.emptyText,
             --     frame = {x = 0, y = h/2 - 8, w = w, h = 16},
             --     textAlignment = "center",
             -- })
@@ -1036,8 +1143,10 @@ function EdgeDock.refreshBars()
         })
     end
     
-    -- 如果有槽位被清理，保存状态
-    EdgeDock.saveState()
+    -- 如果有槽位被清理，保存状态（但启动完成前不保存，避免覆盖状态文件）
+    if EdgeDock._startupComplete then
+        EdgeDock.saveState()
+    end
 end
 
 -- 保存 Edge Dock 状态到文件
@@ -1079,6 +1188,8 @@ function EdgeDock.restoreState()
     local file = io.open(EDGEDOCK_STATE_FILE, "r")
     if not file then
         print("[EdgeDock] 没有找到状态文件")
+        -- 标记启动完成
+        EdgeDock._startupComplete = true
         return
     end
     
@@ -1088,11 +1199,16 @@ function EdgeDock.restoreState()
     local state = hs.json.decode(content)
     if not state or #state == 0 then
         print("[EdgeDock] 状态文件为空")
+        -- 标记启动完成
+        EdgeDock._startupComplete = true
         return
     end
     
     -- 延迟恢复，等待应用启动
-    hs.timer.doAfter(2, function()
+    hs.timer.doAfter(1, function()
+        -- 标记启动完成，此后 refreshBars 可以保存状态
+        EdgeDock._startupComplete = true
+        
         local restoredCount = 0
         
         for _, item in ipairs(state) do
@@ -1196,17 +1312,19 @@ function EdgeDock.highlightBar(slotIndex, highlight)
     local barHeight = EdgeDock.getBarHeight()
     local w, h = EdgeDock.config.barWidth, barHeight
     
+    -- 获取当前模式的颜色
+    local colors = EdgeDock.getCurrentColors()
+    
     -- 清除并重绘
     bar.canvas:removeElement(1)
     bar.canvas:removeElement(1)
     
     if highlight then
-        -- 高亮状态 - 亮色边框
+        -- 高亮状态 - 使用当前模式的颜色
         bar.canvas:appendElements({
             type = "rectangle",
             action = "fill",
-            fillColor = slot and {alpha = 0.9, red = 0.3, green = 0.7, blue = 1.0} 
-                        or {alpha = 0.6, red = 0.5, green = 0.5, blue = 0.5},
+            fillColor = slot and colors.highlightOccupied or colors.highlightEmpty,
             roundedRectRadii = {xRadius = 4, yRadius = 4},
         })
     else
@@ -1222,7 +1340,7 @@ function EdgeDock.highlightBar(slotIndex, highlight)
             bar.canvas:appendElements({
                 type = "rectangle",
                 action = "fill",
-                fillColor = {alpha = 0.2, red = 0.3, green = 0.3, blue = 0.3},
+                fillColor = colors.emptyBar,
                 roundedRectRadii = {xRadius = 4, yRadius = 4},
             })
         end
@@ -1233,9 +1351,8 @@ function EdgeDock.highlightBar(slotIndex, highlight)
         type = "text",
         text = slot and string.upper(string.sub(slot.appName, 1, 1)) or tostring(slotIndex),
         textSize = 14,
-        textColor = highlight and {alpha = 1, red = 1, green = 1, blue = 1}
-                            or (slot and {alpha = 1, red = 0, green = 0, blue = 0} 
-                                or {alpha = 0.4, red = 1, green = 1, blue = 1}),
+        textColor = highlight and colors.highlightText
+                            or (slot and colors.normalOccupiedText or colors.emptyText),
         frame = {x = 0, y = h/2 - 10, w = w, h = 20},
         textAlignment = "center",
     })
@@ -1541,6 +1658,17 @@ EdgeDock.caffeinateWatcher = hs.caffeinate.watcher.new(function(eventType)
     end
 end)
 
+-- 外观模式变化监听
+EdgeDock.appearanceWatcher = hs.distributednotifications.new(function()
+    print("[EdgeDock] 外观模式变化，刷新颜色")
+    -- 清除颜色缓存，让应用颜色根据新模式重新计算
+    EdgeDock.appColorCache = {}
+    hs.timer.doAfter(0.5, function()
+        EdgeDock.refreshBars()
+        EdgeDock.refreshMask()
+    end)
+end, "AppleInterfaceThemeChangedNotification")
+
 -- ============================================
 -- 屏幕切换后自动调整半屏窗口高度
 -- ============================================
@@ -1620,21 +1748,22 @@ end
 
 -- 启动
 function EdgeDock.start()
-    -- 先恢复可能被之前实例藏起来的窗口
+    -- 先恢复可能被之前实例藏起来的窗口（这些不在状态文件中）
     EdgeDock.recoverHiddenWindows()
     
-    -- 初始化小条和遮罩
-    EdgeDock.refreshBars()
-    EdgeDock.refreshMask()
-    
-    -- 启动监听器
+    -- 启动监听器（在恢复状态前启动，以便恢复后的窗口能被正确处理）
     EdgeDock.mouseWatcher:start()
     EdgeDock.appWatcher:start()
     EdgeDock.screenWatcher:start()
     EdgeDock.caffeinateWatcher:start()
+    EdgeDock.appearanceWatcher:start()
     
-    -- 从文件恢复状态
+    -- 从文件恢复状态（必须在 refreshBars 之前，否则空状态会覆盖文件）
     EdgeDock.restoreState()
+    
+    -- 初始化小条和遮罩（在恢复状态后，这样小条能正确显示停靠的窗口）
+    EdgeDock.refreshBars()
+    EdgeDock.refreshMask()
 end
 
 -- 停止
@@ -1652,6 +1781,7 @@ function EdgeDock.stop()
     EdgeDock.appWatcher:stop()
     EdgeDock.screenWatcher:stop()
     EdgeDock.caffeinateWatcher:stop()
+    EdgeDock.appearanceWatcher:stop()
 end
 
 -- 快捷键：停靠到槽位 1-5 (Ctrl+Opt+数字)

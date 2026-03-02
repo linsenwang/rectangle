@@ -172,6 +172,55 @@ config = {
 }
 ```
 
+### 深色/浅色模式颜色配置
+
+Edge Dock 支持根据系统外观模式自动切换颜色：
+
+```lua
+colors = {
+    dark = {
+        emptyBar = {alpha = 0.3, red = 0.3, green = 0.3, blue = 0.3},      -- 空槽位颜色
+        emptyText = {alpha = 0.4, red = 1, green = 1, blue = 1},           -- 空槽位文字颜色
+        highlightOccupied = {alpha = 0.9, red = 0.3, green = 0.7, blue = 1.0},  -- 高亮-有窗口
+        highlightEmpty = {alpha = 0.6, red = 0.5, green = 0.5, blue = 0.5},     -- 高亮-空槽位
+        highlightText = {alpha = 1, red = 1, green = 1, blue = 1},          -- 高亮文字颜色
+        normalOccupiedText = {alpha = 1, red = 0, green = 0, blue = 0},     -- 正常-有窗口文字
+        mask = {alpha = 1, red = 0, green = 0, blue = 0},                   -- 遮罩条颜色
+    },
+    light = {
+        emptyBar = {alpha = 0.25, red = 0.7, green = 0.7, blue = 0.7},      -- 空槽位颜色（浅灰）
+        emptyText = {alpha = 0.5, red = 0.3, green = 0.3, blue = 0.3},      -- 空槽位文字颜色（深灰）
+        highlightOccupied = {alpha = 0.9, red = 0.2, green = 0.5, blue = 0.9},  -- 高亮-有窗口（深蓝）
+        highlightEmpty = {alpha = 0.5, red = 0.6, green = 0.6, blue = 0.6},     -- 高亮-空槽位
+        highlightText = {alpha = 1, red = 1, green = 1, blue = 1},          -- 高亮文字颜色
+        normalOccupiedText = {alpha = 1, red = 1, green = 1, blue = 1},     -- 正常-有窗口文字
+        mask = {alpha = 1, red = 1, green = 1, blue = 1},                   -- 遮罩条颜色（白色）
+    }
+}
+```
+
+系统会自动检测外观模式变化并刷新颜色。
+
+### 应用图标颜色配置
+
+已知应用的颜色也支持深浅模式：
+
+```lua
+knownAppColors = {
+    ["WeChat"] = {
+        dark = {red = 0.35, green = 0.55, blue = 0.40},  -- 深色模式：去饱和微信绿
+        light = {red = 0.20, green = 0.65, blue = 0.30}, -- 浅色模式：更鲜艳的微信绿
+    },
+    ["Safari"] = {
+        dark = {red = 0.15, green = 0.55, blue = 0.95},  -- 深色模式：Safari蓝
+        light = {red = 0.10, green = 0.50, blue = 0.95}, -- 浅色模式：稍深的Safari蓝
+    },
+    -- ... 其他应用
+}
+```
+
+如果某个模式未定义，会自动回退到另一个模式的颜色。
+
 ## 高级功能
 
 ### 恢复被藏的窗口
