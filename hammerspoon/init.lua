@@ -1064,7 +1064,8 @@ function EdgeDock.refreshMask()
     EdgeDock.mask:show()
 end
 
--- 验证槽位窗口是否仍然有效，不清理槽位，只更新引用
+-- 验证槽位窗口是否仍然有效
+-- 此函数用于定期检查，如果窗口确实已关闭，会清理槽位
 function EdgeDock.validateSlot(slotIndex)
     local slot = EdgeDock.slots[slotIndex]
     if not slot then return nil end
@@ -1079,7 +1080,7 @@ function EdgeDock.validateSlot(slotIndex)
         end
     end
     
-    -- winId 失效时，尝试通过应用名和窗口标题重新查找
+    -- winId 失效，尝试重新连接
     if slot.appName then
         local win = EdgeDock.tryReconnect(slot)
         if win then
@@ -1088,12 +1089,14 @@ function EdgeDock.validateSlot(slotIndex)
         end
     end
     
-    -- 窗口暂时不可访问，但不清理槽位（保留数据以便后续重试）
-    print("[EdgeDock] 槽位 " .. slotIndex .. " 窗口暂时不可访问，保留槽位: " .. (slot.appName or "unknown"))
-    return slot
+    -- 无法重新连接，窗口已关闭，清理槽位
+    print("[EdgeDock] 槽位 " .. slotIndex .. " 窗口已关闭，清理槽位: " .. (slot.appName or "unknown"))
+    EdgeDock.slots[slotIndex] = nil
+    return nil
 end
 
 -- 强制验证槽位，如果窗口确实不存在则清理
+-- 用于鼠标交互时的验证，确保用户操作的是正确的窗口
 function EdgeDock.forceValidateSlot(slotIndex)
     local slot = EdgeDock.slots[slotIndex]
     if not slot then return nil end
@@ -1107,7 +1110,7 @@ function EdgeDock.forceValidateSlot(slotIndex)
         end
     end
     
-    -- winId 失效时，尝试重新连接
+    -- winId 失效，尝试重新连接（tryReconnect 已经严格匹配）
     if slot.appName then
         local win = EdgeDock.tryReconnect(slot)
         if win then
@@ -1115,7 +1118,7 @@ function EdgeDock.forceValidateSlot(slotIndex)
             return slot
         end
         
-        -- 立即重试一次
+        -- 重试一次（有时窗口刚创建需要一点时间）
         hs.timer.usleep(200000) -- 200ms
         win = EdgeDock.tryReconnect(slot)
         if win then
@@ -1330,6 +1333,7 @@ function EdgeDock.restoreState()
                 end
                 
                 -- 匹配策略2: 通过窗口标题匹配
+                -- 只在标题唯一时匹配，避免连错窗口
                 if not targetWin and item.winTitle and item.winTitle ~= "" then
                     local titleMatches = {}
                     for _, cand in ipairs(candidates) do
@@ -1342,21 +1346,21 @@ function EdgeDock.restoreState()
                         targetWin = titleMatches[1].win
                         print("[EdgeDock] 恢复时标题唯一匹配: " .. item.appName .. ", title=" .. item.winTitle)
                     elseif #titleMatches > 1 then
-                        -- 多个窗口有相同标题，使用第一个
-                        targetWin = titleMatches[1].win
-                        print("[EdgeDock] 恢复时标题匹配到多个窗口，使用第一个: " .. item.appName .. ", title=" .. item.winTitle)
+                        -- 多个窗口有相同标题，无法确定哪个是原来的
+                        -- 从文件恢复时也保持严格，避免连错窗口
+                        print("[EdgeDock] 恢复失败: 有 " .. #titleMatches .. " 个窗口标题相同，无法确定原窗口: " .. item.winTitle)
+                        -- 不设置 targetWin，跳过此槽位
                     end
                 end
                 
-                -- 匹配策略3: 如果没有匹配到，且只有一个窗口，直接使用
-                if not targetWin then
+                -- 匹配策略3: 如果应用只有一个窗口且原窗口没有标题
+                if not targetWin and (not item.winTitle or item.winTitle == "") then
                     if #candidates == 1 then
                         targetWin = candidates[1].win
-                        print("[EdgeDock] 恢复时应用只有一个窗口: " .. item.appName)
-                    elseif #candidates > 1 then
-                        -- 多个窗口但没有匹配，使用第一个并警告
-                        targetWin = candidates[1].win
-                        print("[EdgeDock] 警告: 应用有多个窗口但无法匹配，使用第一个: " .. item.appName)
+                        print("[EdgeDock] 恢复时单窗口无标题匹配: " .. item.appName)
+                    else
+                        print("[EdgeDock] 恢复失败: 应用有 " .. #candidates .. " 个窗口且原窗口无标题，无法确定: " .. item.appName)
+                        -- 不设置 targetWin，跳过此槽位
                     end
                 end
                 
@@ -1546,35 +1550,30 @@ function EdgeDock.dockWindow(win, slotIndex)
 end
 
 -- 辅助函数：尝试重新连接窗口
+-- 注意：此函数只在确认能找到原窗口时才返回窗口，否则返回 nil
 function EdgeDock.tryReconnect(slot)
     if not slot or not slot.appName then 
         print("[EdgeDock] 重新连接失败: 槽位数据不完整")
         return nil 
     end
     
-    print("[EdgeDock] 尝试重新连接: " .. slot.appName .. " (saved winId: " .. tostring(slot.winId) .. ")")
+    print("[EdgeDock] 尝试重新连接: " .. slot.appName .. " (saved winId: " .. tostring(slot.winId) .. ", title: " .. tostring(slot.winTitle) .. ")")
     
     -- 方法1: 通过 hs.application.get 查找
     local app = hs.application.get(slot.appName)
-    if app then
-        print("[EdgeDock] 方法1成功找到应用: " .. slot.appName)
-    else
+    if not app then
         -- 方法2: 遍历所有运行中的应用（通过 name()）
-        print("[EdgeDock] 方法1失败，尝试方法2...")
         for _, a in ipairs(hs.application.runningApplications()) do
             local name = a:name()
             if name and name == slot.appName then
                 app = a
-                print("[EdgeDock] 方法2成功找到应用: " .. slot.appName)
                 break
             end
         end
     end
     
-    -- 方法3: 尝试通过 bundle ID 查找（某些应用需要）
+    -- 方法3: 尝试通过 bundle ID 查找
     if not app then
-        print("[EdgeDock] 方法2失败，尝试方法3(bundle ID)...")
-        -- 常见应用的 bundle ID 映射
         local bundleMap = {
             ["WeChat"] = "com.tencent.xinWeChat",
             ["Music"] = "com.apple.Music",
@@ -1585,9 +1584,6 @@ function EdgeDock.tryReconnect(slot)
         local bundleID = bundleMap[slot.appName]
         if bundleID then
             app = hs.application.get(bundleID)
-            if app then
-                print("[EdgeDock] 方法3成功找到应用: " .. slot.appName)
-            end
         end
     end
     
@@ -1600,14 +1596,12 @@ function EdgeDock.tryReconnect(slot)
     local windows = app:allWindows()
     print("[EdgeDock] 应用 " .. slot.appName .. " 有 " .. #windows .. " 个窗口")
     
-    -- 如果没有窗口，直接返回
     if #windows == 0 then
         print("[EdgeDock] 重新连接失败: 应用 " .. slot.appName .. " 没有窗口")
         return nil
     end
     
-    local targetWin = nil
-    local candidates = {}  -- 存储所有候选窗口
+    local candidates = {}
     
     -- 收集所有标准窗口
     for _, win in ipairs(windows) do
@@ -1615,26 +1609,31 @@ function EdgeDock.tryReconnect(slot)
             local title = win:title() or ""
             local id = win:id()
             table.insert(candidates, {win = win, title = title, id = id})
-            print("[EdgeDock] 检查窗口: id=" .. id .. ", title=" .. title)
+            print("[EdgeDock]   候选窗口: id=" .. id .. ", title=" .. title)
         end
     end
     
-    -- 匹配策略（按优先级排序）：
-    -- 1. 优先通过 winId 匹配（窗口仍然存在且 ID 未变）
-    -- 2. 其次通过窗口标题匹配
-    -- 3. 如果同一应用有多个相同标题的窗口，根据槽位历史选择最合适的
+    if #candidates == 0 then
+        print("[EdgeDock] 重新连接失败: 应用 " .. slot.appName .. " 没有标准窗口")
+        return nil
+    end
     
+    local targetWin = nil
+    
+    -- 匹配策略1: 优先通过 winId 匹配（窗口仍然存在且 ID 未变）
+    -- 这是休眠/唤醒后最常见的情况
     if slot.winId then
         for _, cand in ipairs(candidates) do
             if cand.id == slot.winId then
                 targetWin = cand.win
-                print("[EdgeDock] winId 匹配成功: " .. slot.winId)
+                print("[EdgeDock] 重新连接成功(winId匹配): " .. slot.appName .. ", id=" .. slot.winId)
                 break
             end
         end
     end
     
-    -- 策略2: 通过窗口标题匹配
+    -- 匹配策略2: 通过窗口标题匹配（ID 变化但标题相同）
+    -- 只在 winId 匹配失败且标题不为空时尝试
     if not targetWin and slot.winTitle and slot.winTitle ~= "" then
         local titleMatches = {}
         for _, cand in ipairs(candidates) do
@@ -1644,36 +1643,35 @@ function EdgeDock.tryReconnect(slot)
         end
         
         if #titleMatches == 1 then
-            -- 只有一个匹配，直接使用
+            -- 只有一个匹配，认为是同一个窗口（标题唯一）
             targetWin = titleMatches[1].win
-            print("[EdgeDock] 标题唯一匹配成功: " .. slot.winTitle)
+            print("[EdgeDock] 重新连接成功(标题唯一匹配): " .. slot.appName .. ", title=" .. slot.winTitle)
         elseif #titleMatches > 1 then
-            -- 多个窗口有相同标题，选择 ID 最接近的（通常意味着是同一个窗口）
-            -- 或者选择第一个
-            targetWin = titleMatches[1].win
-            print("[EdgeDock] 标题匹配到 " .. #titleMatches .. " 个窗口，使用第一个: " .. slot.winTitle)
+            -- 多个窗口有相同标题，无法确定哪个是原来的
+            -- 宁可不连接，也不要连错窗口
+            print("[EdgeDock] 重新连接失败: 有 " .. #titleMatches .. " 个窗口标题相同，无法确定原窗口: " .. slot.winTitle)
+            return nil
         end
     end
     
-    -- 策略3: 如果没有标题匹配，且应用只有一个窗口，直接使用
-    if not targetWin then
+    -- 匹配策略3: 如果应用只有一个窗口且原窗口没有标题
+    -- 这种情况比较少见，需要谨慎处理
+    if not targetWin and (not slot.winTitle or slot.winTitle == "") then
         if #candidates == 1 then
             targetWin = candidates[1].win
-            print("[EdgeDock] 应用只有一个窗口，直接使用")
-        elseif #candidates > 1 then
-            -- 多个窗口且没有匹配，选择第一个并警告
-            targetWin = candidates[1].win
-            print("[EdgeDock] 警告: 应用有多个窗口但无法确定哪个是原来的，使用第一个")
+            print("[EdgeDock] 重新连接成功(单窗口无标题): " .. slot.appName)
+        else
+            print("[EdgeDock] 重新连接失败: 应用有 " .. #candidates .. " 个窗口且原窗口无标题，无法确定")
+            return nil
         end
     end
     
     if targetWin then
         slot.win = targetWin
         slot.winId = targetWin:id()
-        print("[EdgeDock] 窗口重新连接成功: " .. slot.appName .. ", winId=" .. slot.winId)
         return targetWin
     else
-        print("[EdgeDock] 重新连接失败: 应用 " .. slot.appName .. " 没有可用的标准窗口")
+        print("[EdgeDock] 重新连接失败: 无法找到原窗口 " .. slot.appName .. "/" .. tostring(slot.winTitle))
     end
     
     return nil
