@@ -1036,9 +1036,15 @@ function EdgeDock.isPointInSlot(x, y, slotIndex)
 end
 
 -- 检查点是否在窗口区域内（用于检测鼠标是否离开窗口）
-function EdgeDock.isPointInWindow(mouseX, mouseY, win)
-    if not win then return false end
-    local frame = win:frame()
+function EdgeDock.isPointInWindow(mouseX, mouseY, win, slot)
+    local frame = nil
+    if win then
+        frame = win:frame()
+    elseif slot and slot.lastWinFrame then
+        -- 使用缓存的 frame
+        frame = slot.lastWinFrame
+    end
+    if not frame then return false end
     return mouseX >= frame.x and mouseX <= frame.x + frame.w
            and mouseY >= frame.y and mouseY <= frame.y + frame.h
 end
@@ -1064,78 +1070,47 @@ function EdgeDock.refreshMask()
     EdgeDock.mask:show()
 end
 
--- 验证槽位窗口是否仍然有效
--- 此函数用于定期检查，如果窗口确实已关闭，会清理槽位
+-- 验证槽位窗口是否仍然有效（后台定时器使用）
 function EdgeDock.validateSlot(slotIndex)
     local slot = EdgeDock.slots[slotIndex]
     if not slot then return nil end
     
-    -- 尝试通过 winId 重新获取窗口对象
+    -- 尝试通过 winId 获取窗口对象
     if slot.winId then
         local win = hs.window.get(slot.winId)
-        if win and win:isStandard() then
-            -- 窗口仍然有效，更新引用
+        if win then
             slot.win = win
             return slot
         end
     end
     
-    -- winId 失效，尝试重新连接
-    if slot.appName then
-        local win = EdgeDock.tryReconnect(slot)
-        if win then
-            print("[EdgeDock] 槽位 " .. slotIndex .. " 窗口已重新连接: " .. slot.appName)
-            return slot
-        end
-    end
-    
-    -- 无法重新连接，窗口已关闭，清理槽位
-    print("[EdgeDock] 槽位 " .. slotIndex .. " 窗口已关闭，清理槽位: " .. (slot.appName or "unknown"))
-    EdgeDock.slots[slotIndex] = nil
+    -- 窗口已关闭
     return nil
 end
 
--- 强制验证槽位，如果窗口确实不存在则清理
--- 用于鼠标交互时的验证，确保用户操作的是正确的窗口
-function EdgeDock.forceValidateSlot(slotIndex)
+-- 轻量级验证槽位（用于鼠标交互，非阻塞）
+-- 只检查 winId 是否还有效，不做耗时的重新连接
+function EdgeDock.quickValidateSlot(slotIndex)
     local slot = EdgeDock.slots[slotIndex]
     if not slot then return nil end
     
-    -- 尝试通过 winId 重新获取窗口对象
+    -- 尝试通过 winId 获取窗口对象
     if slot.winId then
         local win = hs.window.get(slot.winId)
-        if win and win:isStandard() then
+        -- 简化检查：只要有窗口对象就认为有效
+        if win then
             slot.win = win
             return slot
         end
     end
     
-    -- winId 失效，尝试重新连接（tryReconnect 已经严格匹配）
-    if slot.appName then
-        local win = EdgeDock.tryReconnect(slot)
-        if win then
-            print("[EdgeDock] 槽位 " .. slotIndex .. " 强制验证重新连接: " .. slot.appName)
-            return slot
-        end
-        
-        -- 重试一次（有时窗口刚创建需要一点时间）
-        hs.timer.usleep(200000) -- 200ms
-        win = EdgeDock.tryReconnect(slot)
-        if win then
-            print("[EdgeDock] 槽位 " .. slotIndex .. " 强制验证重试成功: " .. slot.appName)
-            return slot
-        end
-    end
-    
-    -- 确实找不到窗口，清理槽位
-    print("[EdgeDock] 槽位 " .. slotIndex .. " 确认失效，清理槽位: " .. (slot.appName or "unknown"))
-    EdgeDock.slots[slotIndex] = nil
+    -- winId 失效，返回 nil
     return nil
 end
 
--- 创建/刷新所有小条
-function EdgeDock.refreshBars()
-    -- 清理旧的
+-- 初始化 bars（一次性创建，后续只更新内容）
+function EdgeDock.initBars()
+    -- 如果已经初始化过，先清理
     for _, bar in ipairs(EdgeDock.bars) do
         if bar.canvas then bar.canvas:delete() end
     end
@@ -1144,56 +1119,69 @@ function EdgeDock.refreshBars()
     -- 获取当前模式的颜色
     local colors = EdgeDock.getCurrentColors()
     
+    -- 创建 bars（初始为空槽位样式）
     for i = 1, EdgeDock.config.maxSlots do
         local x, y, w, h = EdgeDock.getSlotPosition(i)
-        
-        -- 验证槽位有效性
-        local slot = EdgeDock.validateSlot(i)
-        
         local bar = hs.canvas.new({x = x, y = y, w = w, h = h})
-        
-        if slot then
-            -- 有窗口 - 应用图标颜色（增量后的鲜艳颜色）
-            local iconColor = EdgeDock.getAppIconColor(slot.appName) or {alpha = 0.85, red = 0.5, green = 0.5, blue = 0.5}
-            local brightColor = EdgeDock.brightenColor(iconColor, 1.25)
-            
-            bar:appendElements({
-                type = "rectangle",
-                action = "fill",
-                fillColor = brightColor,
-                roundedRectRadii = {xRadius = 4, yRadius = 4},
-            })
-            -- 不显示文字，只用颜色标识应用
-        else
-            -- 空槽位 - 使用当前模式的颜色
-            bar:appendElements({
-                type = "rectangle",
-                action = "fill",
-                fillColor = colors.emptyBar,
-                roundedRectRadii = {xRadius = 4, yRadius = 4},
-            })
-            -- bar:appendElements({
-            --     type = "text",
-            --     text = tostring(i),
-            --     textSize = 11,
-            --     textColor = colors.emptyText,
-            --     frame = {x = 0, y = h/2 - 8, w = w, h = 16},
-            --     textAlignment = "center",
-            -- })
-        end
-        
+        bar:level(hs.canvas.windowLevels.popUpMenu)
+        -- 初始添加一个空槽位样式元素
+        bar:appendElements({
+            type = "rectangle",
+            action = "fill",
+            fillColor = colors.emptyBar,
+            roundedRectRadii = {xRadius = 4, yRadius = 4},
+        })
         bar:show()
-        bar:level(hs.canvas.windowLevels.popUpMenu)  -- 置顶显示
-        
         table.insert(EdgeDock.bars, {
             canvas = bar,
             slotIndex = i,
         })
     end
+end
+
+-- 刷新所有小条（只更新内容，不复用 canvas）
+function EdgeDock.refreshBars()
+    -- 如果 bars 还没初始化，先初始化
+    if #EdgeDock.bars == 0 then
+        EdgeDock.initBars()
+        return
+    end
     
-    -- 如果有槽位被清理，保存状态（但启动完成前不保存，避免覆盖状态文件）
-    if EdgeDock._startupComplete then
-        EdgeDock.saveState()
+    -- 获取当前模式的颜色
+    local colors = EdgeDock.getCurrentColors()
+    
+    for i = 1, EdgeDock.config.maxSlots do
+        local bar = EdgeDock.bars[i]
+        if not bar or not bar.canvas then goto continue end
+        
+        local slot = EdgeDock.slots[i]
+        local w, h = EdgeDock.config.barWidth, EdgeDock.getBarHeight()
+        
+        -- 安全地移除旧内容（使用 pcall 避免索引越界错误）
+        pcall(function() bar.canvas:removeElement(1) end)
+        
+        if slot then
+            -- 有窗口 - 应用图标颜色
+            local iconColor = EdgeDock.getAppIconColor(slot.appName) or {alpha = 0.85, red = 0.5, green = 0.5, blue = 0.5}
+            local brightColor = EdgeDock.brightenColor(iconColor, 1.25)
+            
+            bar.canvas:appendElements({
+                type = "rectangle",
+                action = "fill",
+                fillColor = brightColor,
+                roundedRectRadii = {xRadius = 4, yRadius = 4},
+            })
+        else
+            -- 空槽位
+            bar.canvas:appendElements({
+                type = "rectangle",
+                action = "fill",
+                fillColor = colors.emptyBar,
+                roundedRectRadii = {xRadius = 4, yRadius = 4},
+            })
+        end
+        
+        ::continue::
     end
 end
 
@@ -1682,16 +1670,19 @@ function EdgeDock.peekWindow(slotIndex)
     local slot = EdgeDock.slots[slotIndex]
     if not slot then return end
     
-    -- 先尝试强制验证和重新连接
-    slot = EdgeDock.forceValidateSlot(slotIndex)
-    if not slot then
-        print("[EdgeDock] 槽位 " .. slotIndex .. " 无法恢复，清理槽位")
-        EdgeDock.refreshBars()
-        EdgeDock.saveState()
+    -- 快速获取窗口对象（不做耗时的验证）
+    local win = slot.win
+    if not win and slot.winId then
+        win = hs.window.get(slot.winId)
+    end
+    
+    if not win then
+        -- 窗口暂时不可用，不处理
         return
     end
     
-    local win = slot.win
+    -- 更新引用
+    slot.win = win
     
     print(string.format("[EdgeDock] 显示槽位%d, winY=%.0f", slotIndex, slot.winY))
     
@@ -1728,6 +1719,9 @@ function EdgeDock.peekWindow(slotIndex)
         setWinFrame(win, hs.geometry.rect(showX, slot.winY, winW, winH))
         slot.isShowing = true
         
+        -- 缓存窗口 frame 供鼠标移动检测使用
+        slot.lastWinFrame = {x = showX, y = slot.winY, w = winW, h = winH}
+        
         -- 将窗口置顶并激活（最前面）
         win:raise()
         win:focus()
@@ -1746,23 +1740,24 @@ function EdgeDock.hideWindow(slotIndex)
     local slot = EdgeDock.slots[slotIndex]
     if not slot then return end
     
-    -- 先尝试强制验证和重新连接
-    slot = EdgeDock.forceValidateSlot(slotIndex)
-    if not slot then
-        print("[EdgeDock] 槽位 " .. slotIndex .. " 隐藏时无法恢复，清理槽位")
-        EdgeDock.refreshBars()
-        EdgeDock.saveState()
-        return
+    -- 尝试获取窗口对象
+    local win = slot.win
+    if not win then
+        if slot.winId then
+            win = hs.window.get(slot.winId)
+        end
     end
     
-    local win = slot.win
+    -- 如果找到窗口，移动它
+    if win then
+        -- 移到屏幕右下角（只露出1x1像素，保持原尺寸）
+        local screen = hs.screen.mainScreen():frame()
+        local hideX = screen.x + screen.w - 1
+        local hideY = screen.y + screen.h - 1
+        setWinFrame(win, hs.geometry.rect(hideX, hideY, slot.originalFrame.w, slot.originalFrame.h))
+        slot.win = win
+    end
     
-    -- 移到屏幕右下角（只露出1x1像素，保持原尺寸）
-    local screen = hs.screen.mainScreen():frame()
-    local hideX = screen.x + screen.w - 1
-    local hideY = screen.y + screen.h - 1
-    
-    setWinFrame(win, hs.geometry.rect(hideX, hideY, slot.originalFrame.w, slot.originalFrame.h))
     slot.isShowing = false
 end
 
@@ -1776,19 +1771,22 @@ function EdgeDock.undockWindow(slotIndex, focus)
         slot.hideTimer:stop()
     end
     
-    -- 尝试强制验证和重新连接
-    slot = EdgeDock.forceValidateSlot(slotIndex)
+    -- 尝试获取窗口
+    local win = slot.win
+    if not win and slot.winId then
+        win = hs.window.get(slot.winId)
+    end
     
-    if slot and slot.win and slot.win:isStandard() then
-        setWinFrame(slot.win, slot.originalFrame)
-        if focus then slot.win:focus() end
+    if win then
+        setWinFrame(win, slot.originalFrame)
+        if focus then win:focus() end
     else
         print("[EdgeDock] 恢复时窗口已失效: " .. (slot.appName or "unknown"))
     end
     
     EdgeDock.slots[slotIndex] = nil
     EdgeDock.refreshBars()
-    EdgeDock.saveState()  -- 保存状态
+    EdgeDock.saveState()
     
     if focus then
         notify("Edge Dock", "窗口已恢复")
@@ -1807,7 +1805,7 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
         if not slot then goto continue end
         
         local sx, sy, sw, sh = EdgeDock.getSlotPosition(i)
-        -- 扩大检测区域：屏幕右边缘附近都能触发（支持 peekWidth=0 的情况）
+        -- 扩大检测区域：屏幕右边缘附近都能触发
         local inSlotArea = mousePos.x >= sx - 20 and mousePos.x <= rightEdge + 5
                           and mousePos.y >= sy - 5 and mousePos.y <= sy + sh + 5
         
@@ -1818,8 +1816,8 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
         
         -- 检测是否离开窗口区域 - 启动隐藏计时器
         if slot.isShowing then
-            local inWindow = EdgeDock.isPointInWindow(mousePos.x, mousePos.y, slot.win)
-            -- 扩大槽位检测区域，确保鼠标在小条附近时不会误判为离开
+            local inWindow = EdgeDock.isPointInWindow(mousePos.x, mousePos.y, slot.win, slot)
+            -- 扩大槽位检测区域
             local inSlot = mousePos.x >= sx - 30 and mousePos.x <= rightEdge + 10
                           and mousePos.y >= sy - 10 and mousePos.y <= sy + sh + 10
             
@@ -2004,6 +2002,34 @@ function EdgeDock.start()
     EdgeDock.caffeinateWatcher:start()
     EdgeDock.appearanceWatcher:start()
     
+    -- 启动定期验证定时器（每 5 秒验证一次槽位，清理已关闭的窗口）
+    EdgeDock.validationTimer = hs.timer.doEvery(5, function()
+        local changed = false
+        for i = 1, EdgeDock.config.maxSlots do
+            local slot = EdgeDock.slots[i]
+            if slot then
+                -- 轻量级检查：只检查 winId 是否还有效
+                local win = nil
+                if slot.winId then
+                    win = hs.window.get(slot.winId)
+                end
+                if not win then
+                    -- 窗口已关闭，清理槽位
+                    print("[EdgeDock] 槽位 " .. i .. " 窗口已关闭，清理槽位")
+                    EdgeDock.slots[i] = nil
+                    changed = true
+                else
+                    -- 更新引用
+                    slot.win = win
+                end
+            end
+        end
+        if changed then
+            EdgeDock.refreshBars()
+            EdgeDock.saveState()
+        end
+    end)
+    
     -- 从文件恢复状态（必须在 refreshBars 之前，否则空状态会覆盖文件）
     EdgeDock.restoreState()
     
@@ -2028,6 +2054,10 @@ function EdgeDock.stop()
     EdgeDock.screenWatcher:stop()
     EdgeDock.caffeinateWatcher:stop()
     EdgeDock.appearanceWatcher:stop()
+    if EdgeDock.validationTimer then
+        EdgeDock.validationTimer:stop()
+        EdgeDock.validationTimer = nil
+    end
 end
 
 -- 快捷键：停靠到槽位 1-5 (Ctrl+Opt+数字)
