@@ -705,6 +705,7 @@ local EdgeDock = {
         dragStartFrame = nil,
         highlightedSlot = nil,  -- 当前高亮的槽位
     },
+    currentBarScreen = nil,  -- 当前小条所在的屏幕（用于多显示器检测）
     config = {
         maxSlots = 5,       -- 最大槽位数
         barWidth = 4,       -- 小条宽度
@@ -1009,18 +1010,27 @@ function EdgeDock.brightenColor(color, factor)
     }
 end
 
+-- 获取鼠标所在的屏幕
+function EdgeDock.getCurrentScreen()
+    local screen = hs.mouse.getCurrentScreen()
+    if not screen then
+        screen = hs.screen.mainScreen()
+    end
+    return screen:frame()
+end
+
 -- 计算小条高度（根据屏幕高度自动分配）
-function EdgeDock.getBarHeight()
-    local screen = hs.screen.mainScreen():frame()
+function EdgeDock.getBarHeight(screenFrame)
+    local screen = screenFrame or EdgeDock.getCurrentScreen()
     local availableHeight = screen.h - EdgeDock.config.topMargin - EdgeDock.config.bottomMargin
     local totalGap = (EdgeDock.config.maxSlots - 1) * EdgeDock.config.barGap
     return math.floor((availableHeight - totalGap) / EdgeDock.config.maxSlots)
 end
 
 -- 获取槽位位置（根据屏幕高度自动分布）
-function EdgeDock.getSlotPosition(slotIndex)
-    local screen = hs.screen.mainScreen():frame()
-    local barHeight = EdgeDock.getBarHeight()
+function EdgeDock.getSlotPosition(slotIndex, screenFrame)
+    local screen = screenFrame or EdgeDock.getCurrentScreen()
+    local barHeight = EdgeDock.getBarHeight(screen)
     local startY = screen.y + EdgeDock.config.topMargin
     local x = screen.x + screen.w - EdgeDock.config.barWidth - 5  -- 减5px给遮罩条留位置
     local y = startY + (slotIndex - 1) * (barHeight + EdgeDock.config.barGap)
@@ -1058,7 +1068,7 @@ function EdgeDock.refreshMask()
     -- 获取当前模式的颜色
     local colors = EdgeDock.getCurrentColors()
     
-    local screen = hs.screen.mainScreen():frame()
+    local screen = EdgeDock.getCurrentScreen()
     -- 2px宽，全屏高，放在最右侧
     EdgeDock.mask = hs.canvas.new({x = screen.x + screen.w - 2, y = screen.y, w = 2, h = screen.h})
     EdgeDock.mask:appendElements({
@@ -1134,9 +1144,14 @@ function EdgeDock.initBars()
     -- 获取当前模式的颜色
     local colors = EdgeDock.getCurrentColors()
     
+    -- 获取当前屏幕
+    local screen = EdgeDock.getCurrentScreen()
+    -- 记录小条所在的屏幕
+    EdgeDock.currentBarScreen = screen.x .. "," .. screen.y .. "," .. screen.w .. "," .. screen.h
+    
     -- 创建 bars（初始为空槽位样式）
     for i = 1, EdgeDock.config.maxSlots do
-        local x, y, w, h = EdgeDock.getSlotPosition(i)
+        local x, y, w, h = EdgeDock.getSlotPosition(i, screen)
         local bar = hs.canvas.new({x = x, y = y, w = w, h = h})
         bar:level(hs.canvas.windowLevels.popUpMenu)
         -- 初始添加一个空槽位样式元素
@@ -1165,12 +1180,18 @@ function EdgeDock.refreshBars()
     -- 获取当前模式的颜色
     local colors = EdgeDock.getCurrentColors()
     
+    -- 获取当前屏幕
+    local screen = EdgeDock.getCurrentScreen()
+    
     for i = 1, EdgeDock.config.maxSlots do
         local bar = EdgeDock.bars[i]
         if not bar or not bar.canvas then goto continue end
         
+        -- 更新小条位置（支持多显示器切换）
+        local x, y, w, h = EdgeDock.getSlotPosition(i, screen)
+        bar.canvas:frame({x = x, y = y, w = w, h = h})
+        
         local slot = EdgeDock.slots[i]
-        local w, h = EdgeDock.config.barWidth, EdgeDock.getBarHeight()
         
         -- 安全地移除旧内容（使用 pcall 避免索引越界错误）
         pcall(function() bar.canvas:removeElement(1) end)
@@ -1248,6 +1269,7 @@ function EdgeDock.saveState()
             appName = slot.appName,
             winTitle = winTitle,
             winId = winId,  -- 保存窗口 ID（虽然重启后会失效，但休眠/唤醒有用）
+            screenId = slot.screenId,  -- 保存窗口原本所在的屏幕
             originalFrame = {
                 x = slot.originalFrame.x,
                 y = slot.originalFrame.y,
@@ -1376,11 +1398,11 @@ function EdgeDock.restoreState()
                         item.originalFrame.h
                     )
                     
-                    -- 使用主屏幕（和小条一致）
+                    -- 使用主屏幕（启动时小条在主屏幕）
                     local screen = hs.screen.mainScreen():frame()
                     
                     -- 获取槽位位置
-                    local sx, sy, sw, sh = EdgeDock.getSlotPosition(item.slotIndex)
+                    local sx, sy, sw, sh = EdgeDock.getSlotPosition(item.slotIndex, screen)
                     
                     -- 计算窗口在槽位区域内的垂直居中位置
                     local winY = sy + (sh - frame.h) / 2
@@ -1402,6 +1424,7 @@ function EdgeDock.restoreState()
                         slotY = sy,
                         slotHeight = sh,
                         winY = winY,
+                        screenId = item.screenId,  -- 保留原屏幕信息
                     }
                     
                     -- 隐藏窗口到屏幕右下角
@@ -1434,8 +1457,14 @@ function EdgeDock.highlightBar(slotIndex, highlight)
     if not bar or not bar.canvas then return end
     
     local slot = EdgeDock.slots[slotIndex]
-    local barHeight = EdgeDock.getBarHeight()
+    -- 获取当前屏幕和槽位高度
+    local screen = EdgeDock.getCurrentScreen()
+    local barHeight = EdgeDock.getBarHeight(screen)
     local w, h = EdgeDock.config.barWidth, barHeight
+    
+    -- 更新小条位置
+    local x, y = EdgeDock.getSlotPosition(slotIndex, screen)
+    bar.canvas:frame({x = x, y = y, w = w, h = h})
     
     -- 获取当前模式的颜色
     local colors = EdgeDock.getCurrentColors()
@@ -1510,11 +1539,11 @@ function EdgeDock.dockWindow(win, slotIndex)
     local app = win:application()
     local frame = win:frame()
     
-    -- 使用主屏幕（和小条一致），而不是窗口所在屏幕
-    local screen = hs.screen.mainScreen():frame()
+    -- 使用当前鼠标所在的屏幕（支持多显示器）
+    local screen = EdgeDock.getCurrentScreen()
     
-    -- 获取槽位位置（基于主屏幕）
-    local sx, sy, sw, sh = EdgeDock.getSlotPosition(slotIndex)
+    -- 获取槽位位置（基于当前屏幕）
+    local sx, sy, sw, sh = EdgeDock.getSlotPosition(slotIndex, screen)
     
     -- 计算窗口在槽位区域内的垂直居中位置
     local winY = sy + (sh - frame.h) / 2
@@ -1539,9 +1568,10 @@ function EdgeDock.dockWindow(win, slotIndex)
         slotY = sy,         -- 槽位顶部 Y
         slotHeight = sh,    -- 槽位高度
         winY = winY,        -- 窗口实际显示的 Y（垂直居中）
+        screenId = win:screen():id(),  -- 记录窗口原本所在的屏幕
     }
     
-    -- 隐藏到屏幕右下角（只露出1x1像素，保持尺寸）
+    -- 隐藏到当前屏幕右下角（只露出1x1像素，保持尺寸）
     local hideX = screen.x + screen.w - 1
     local hideY = screen.y + screen.h - 1
     setWinFrame(win, hs.geometry.rect(hideX, hideY, frame.w, frame.h))
@@ -1723,8 +1753,24 @@ function EdgeDock.peekWindow(slotIndex)
     end
     
     if not slot.isShowing then
-        -- 使用主屏幕（和小条一致）
-        local screen = hs.screen.mainScreen():frame()
+        -- 使用当前鼠标所在的屏幕（支持多显示器）
+        local screen = EdgeDock.getCurrentScreen()
+        
+        -- 更新槽位位置（可能在不同的显示器上）
+        local sx, sy, sw, sh = EdgeDock.getSlotPosition(slotIndex, screen)
+        slot.slotY = sy
+        slot.slotHeight = sh
+        
+        -- 重新计算窗口在槽位区域内的垂直居中位置
+        local winY = sy + (sh - slot.originalFrame.h) / 2
+        if winY < screen.y then
+            winY = screen.y
+        end
+        if winY + slot.originalFrame.h > screen.y + screen.h then
+            winY = screen.y + screen.h - slot.originalFrame.h
+        end
+        slot.winY = winY
+        
         -- 使用 originalFrame 的尺寸（窗口在屏幕外时 win:frame() 可能返回错误值）
         local winW = slot.originalFrame.w
         local winH = slot.originalFrame.h
@@ -1765,8 +1811,9 @@ function EdgeDock.hideWindow(slotIndex)
     
     -- 如果找到窗口，移动它
     if win then
+        -- 使用当前鼠标所在的屏幕（支持多显示器）
+        local screen = EdgeDock.getCurrentScreen()
         -- 移到屏幕右下角（只露出1x1像素，保持原尺寸）
-        local screen = hs.screen.mainScreen():frame()
         local hideX = screen.x + screen.w - 1
         local hideY = screen.y + screen.h - 1
         setWinFrame(win, hs.geometry.rect(hideX, hideY, slot.originalFrame.w, slot.originalFrame.h))
@@ -1811,7 +1858,30 @@ end
 -- 鼠标移动监听（仅用于悬停检测，不拦截事件）
 EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, function(e)
     local mousePos = e:location()
-    local screen = hs.screen.mainScreen():frame()
+    -- 使用当前鼠标所在的屏幕（支持多显示器）
+    local screen = EdgeDock.getCurrentScreen()
+    
+    -- 检测屏幕变化，如果鼠标移动到了不同屏幕，重新定位小条
+    if EdgeDock.currentBarScreen then
+        local screenId = screen.x .. "," .. screen.y .. "," .. screen.w .. "," .. screen.h
+        if EdgeDock.currentBarScreen ~= screenId then
+            -- 屏幕变化，重新定位小条和遮罩
+            EdgeDock.currentBarScreen = screenId
+            EdgeDock.refreshBars()
+            EdgeDock.refreshMask()
+            -- 如果有正在显示的窗口，先隐藏它（避免窗口留在旧屏幕）
+            for i = 1, EdgeDock.config.maxSlots do
+                local slot = EdgeDock.slots[i]
+                if slot and slot.isShowing then
+                    EdgeDock.hideWindow(i)
+                end
+            end
+        end
+    else
+        -- 初始化当前屏幕
+        EdgeDock.currentBarScreen = screen.x .. "," .. screen.y .. "," .. screen.w .. "," .. screen.h
+    end
+    
     local rightEdge = screen.x + screen.w
     
     -- 悬停检测
@@ -1819,7 +1889,7 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
         local slot = EdgeDock.slots[i]
         if not slot then goto continue end
         
-        local sx, sy, sw, sh = EdgeDock.getSlotPosition(i)
+        local sx, sy, sw, sh = EdgeDock.getSlotPosition(i, screen)
         -- 扩大检测区域：屏幕右边缘附近都能触发
         local inSlotArea = mousePos.x >= sx - 20 and mousePos.x <= rightEdge + 5
                           and mousePos.y >= sy - 5 and mousePos.y <= sy + sh + 5
@@ -2003,20 +2073,26 @@ screenChangeWatcher:start()
 
 -- 恢复所有可能被之前脚本实例藏起来的窗口
 function EdgeDock.recoverHiddenWindows()
-    local screen = hs.screen.mainScreen():frame()
-    local rightEdge = screen.x + screen.w
+    -- 获取所有屏幕
+    local allScreens = hs.screen.allScreens()
     
     for _, win in ipairs(hs.window.allWindows()) do
         if win:isStandard() then
             local frame = win:frame()
-            -- 如果窗口在屏幕右侧外（被藏起来了），把它拉回来
-            -- 扩大检测范围：从 rightEdge-50 到 rightEdge+100，支持 peekWidth=0 的情况
-            if frame.x >= rightEdge - 50 and frame.x <= rightEdge + 100 then
-                -- 窗口被藏在右边，恢复到屏幕内（居中），保持原始尺寸
-                local newX = screen.x + (screen.w - frame.w) / 2
-                local newY = screen.y + (screen.h - frame.h) / 2
-                setWinFrame(win, hs.geometry.rect(newX, newY, frame.w, frame.h))
-                print("[EdgeDock] 恢复窗口: " .. (win:application():name() or "Unknown"))
+            local winScreen = win:screen()
+            local winScreenFrame = winScreen and winScreen:frame()
+            
+            if winScreenFrame then
+                local rightEdge = winScreenFrame.x + winScreenFrame.w
+                -- 如果窗口在屏幕右侧外（被藏起来了），把它拉回来
+                -- 扩大检测范围：从 rightEdge-50 到 rightEdge+100，支持 peekWidth=0 的情况
+                if frame.x >= rightEdge - 50 and frame.x <= rightEdge + 100 then
+                    -- 窗口被藏在右边，恢复到屏幕内（居中），保持原始尺寸
+                    local newX = winScreenFrame.x + (winScreenFrame.w - frame.w) / 2
+                    local newY = winScreenFrame.y + (winScreenFrame.h - frame.h) / 2
+                    setWinFrame(win, hs.geometry.rect(newX, newY, frame.w, frame.h))
+                    print("[EdgeDock] 恢复窗口: " .. (win:application():name() or "Unknown"))
+                end
             end
         end
     end
