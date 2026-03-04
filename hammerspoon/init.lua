@@ -1084,12 +1084,21 @@ function EdgeDock.validateSlot(slotIndex)
         end
     end
     
+    -- winId 失效，尝试重新连接
+    print("[EdgeDock] 槽位 " .. slotIndex .. " 窗口句柄失效，尝试重新连接...")
+    local reconnectedWin = EdgeDock.tryReconnect(slot)
+    if reconnectedWin then
+        print("[EdgeDock] 槽位 " .. slotIndex .. " 重新连接成功")
+        slot.win = reconnectedWin
+        slot.winId = reconnectedWin:id()
+        return slot
+    end
+    
     -- 窗口已关闭
     return nil
 end
 
 -- 轻量级验证槽位（用于鼠标交互，非阻塞）
--- 只检查 winId 是否还有效，不做耗时的重新连接
 function EdgeDock.quickValidateSlot(slotIndex)
     local slot = EdgeDock.slots[slotIndex]
     if not slot then return nil end
@@ -1097,14 +1106,20 @@ function EdgeDock.quickValidateSlot(slotIndex)
     -- 尝试通过 winId 获取窗口对象
     if slot.winId then
         local win = hs.window.get(slot.winId)
-        -- 简化检查：只要有窗口对象就认为有效
         if win then
             slot.win = win
             return slot
         end
     end
     
-    -- winId 失效，返回 nil
+    -- winId 失效，尝试重新连接
+    local reconnectedWin = EdgeDock.tryReconnect(slot)
+    if reconnectedWin then
+        slot.win = reconnectedWin
+        slot.winId = reconnectedWin:id()
+        return slot
+    end
+    
     return nil
 end
 
@@ -1848,19 +1863,20 @@ end)
 EdgeDock.appWatcher = hs.application.watcher.new(function(appName, eventType, appObj)
     if eventType == hs.application.watcher.terminated then
         print("[EdgeDock] 收到应用关闭事件: " .. (appName or "unknown"))
-        -- 延迟检查，给系统更多时间恢复
-        hs.timer.doAfter(2, function()
-            -- 检查所有槽位（休眠后可能会有多个窗口需要重新连接）
+        -- 增加延迟到 5 秒，给系统更多恢复时间，避免误判休眠唤醒为应用关闭
+        hs.timer.doAfter(5, function()
+            -- 检查所有槽位
             local changed = false
             for i = 1, EdgeDock.config.maxSlots do
                 local slot = EdgeDock.slots[i]
                 if slot then
-                    -- 检查该槽位的应用是否匹配（或已被标记为terminated的应用）
                     if slot.appName == appName then
                         print("[EdgeDock] 检查槽位 " .. i .. " (应用: " .. slot.appName .. ")")
                         -- 使用 validateSlot 来验证和重新连接
                         local validSlot = EdgeDock.validateSlot(i)
                         if not validSlot then
+                            print("[EdgeDock] 槽位 " .. i .. " 确认关闭，清理槽位")
+                            EdgeDock.slots[i] = nil
                             changed = true
                         end
                     end
@@ -1886,15 +1902,31 @@ end)
 EdgeDock.caffeinateWatcher = hs.caffeinate.watcher.new(function(eventType)
     if eventType == hs.caffeinate.watcher.systemDidWake then
         print("[EdgeDock] 系统唤醒，刷新小条")
-        -- 增加延迟到 3 秒，给系统更多恢复时间
-        hs.timer.doAfter(3, function()
-            -- 唤醒后强制验证所有槽位并刷新
+        -- 唤醒后立即尝试恢复窗口引用（不清理）
+        -- 延迟增加到 5 秒，某些应用在唤醒后需要更长时间恢复窗口
+        hs.timer.doAfter(5, function()
+            -- 唤醒后强制验证所有槽位，优先尝试重新连接
+            local reconnectedCount = 0
             for i = 1, EdgeDock.config.maxSlots do
-                EdgeDock.validateSlot(i)
+                local slot = EdgeDock.slots[i]
+                if slot then
+                    local validSlot = EdgeDock.validateSlot(i)
+                    if validSlot then
+                        reconnectedCount = reconnectedCount + 1
+                        -- 确保窗口还在隐藏位置
+                        if slot.isShowing then
+                            EdgeDock.hideWindow(i)
+                        end
+                    else
+                        print("[EdgeDock] 唤醒后槽位 " .. i .. " 无法重新连接，清理")
+                        EdgeDock.slots[i] = nil
+                    end
+                end
             end
             EdgeDock.refreshBars()
             EdgeDock.refreshMask()
             EdgeDock.saveState()
+            print("[EdgeDock] 唤醒恢复完成，重新连接 " .. reconnectedCount .. " 个窗口")
         end)
     elseif eventType == hs.caffeinate.watcher.systemWillSleep then
         print("[EdgeDock] 系统即将休眠，保存状态")
@@ -2008,19 +2040,13 @@ function EdgeDock.start()
         for i = 1, EdgeDock.config.maxSlots do
             local slot = EdgeDock.slots[i]
             if slot then
-                -- 轻量级检查：只检查 winId 是否还有效
-                local win = nil
-                if slot.winId then
-                    win = hs.window.get(slot.winId)
-                end
-                if not win then
-                    -- 窗口已关闭，清理槽位
+                -- 使用 validateSlot 进行验证，包含重新连接逻辑
+                local validSlot = EdgeDock.validateSlot(i)
+                if not validSlot then
+                    -- 窗口确实已关闭，清理槽位
                     print("[EdgeDock] 槽位 " .. i .. " 窗口已关闭，清理槽位")
                     EdgeDock.slots[i] = nil
                     changed = true
-                else
-                    -- 更新引用
-                    slot.win = win
                 end
             end
         end
