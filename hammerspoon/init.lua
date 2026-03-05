@@ -1080,31 +1080,79 @@ function EdgeDock.refreshMask()
     EdgeDock.mask:show()
 end
 
+-- 获取带时间戳的日志前缀
+function EdgeDock.logPrefix()
+    return os.date("%Y-%m-%d %H:%M:%S") .. " [EdgeDock]"
+end
+
 -- 验证槽位窗口是否仍然有效（后台定时器使用）
 function EdgeDock.validateSlot(slotIndex)
     local slot = EdgeDock.slots[slotIndex]
     if not slot then return nil end
     
+    local prefix = EdgeDock.logPrefix()
+    local oldWinId = slot.winId
+    local appName = slot.appName or "unknown"
+    
+    -- 检查 winId 是否有效（不为 0 或 -1）
+    if not oldWinId or oldWinId == 0 or oldWinId == -1 then
+        print(prefix .. " [VALIDATE] 槽位 " .. slotIndex .. " (" .. appName .. ") winId=" .. tostring(oldWinId) .. " 无效，尝试重新连接...")
+        -- winId 无效，尝试重新连接
+        local reconnectedWin = EdgeDock.tryReconnect(slot)
+        if reconnectedWin then
+            local newWinId = reconnectedWin:id()
+            print(prefix .. " [VALIDATE] 槽位 " .. slotIndex .. " (" .. appName .. ") 重新连接成功，新winId=" .. tostring(newWinId))
+            slot.win = reconnectedWin
+            slot.winId = newWinId
+            return slot
+        end
+        print(prefix .. " [VALIDATE] 槽位 " .. slotIndex .. " (" .. appName .. ") 重新连接失败")
+        return nil
+    end
+    
     -- 尝试通过 winId 获取窗口对象
-    if slot.winId then
-        local win = hs.window.get(slot.winId)
-        if win then
+    local win = hs.window.get(oldWinId)
+    if win then
+        -- 窗口仍然存在，检查是否和之前是同一个窗口对象
+        local currentWinId = win:id()
+        if currentWinId ~= oldWinId then
+            print(prefix .. " [VALIDATE] 槽位 " .. slotIndex .. " (" .. appName .. ") winId变化: " .. tostring(oldWinId) .. " -> " .. tostring(currentWinId))
+            slot.winId = currentWinId
+        end
+        
+        -- 检查窗口是否是标准窗口
+        if win:isStandard() then
             slot.win = win
+            return slot
+        else
+            -- 窗口存在但不是标准窗口（可能是休眠后的临时状态）
+            print(prefix .. " [VALIDATE] 槽位 " .. slotIndex .. " (" .. appName .. ") 窗口存在但非标准，可能是临时状态")
+            -- 仍然返回 slot，但不更新 win（让定时器后续再试）
+            return slot
+        end
+    else
+        print(prefix .. " [VALIDATE] 槽位 " .. slotIndex .. " (" .. appName .. ") winId=" .. tostring(oldWinId) .. " 获取失败，尝试重新连接...")
+    end
+    
+    -- winId 失效，尝试重新连接
+    local reconnectedWin = EdgeDock.tryReconnect(slot)
+    if reconnectedWin then
+        local newWinId = reconnectedWin:id()
+        if newWinId and newWinId ~= 0 then
+            print(prefix .. " [VALIDATE] 槽位 " .. slotIndex .. " (" .. appName .. ") 重新连接成功，新winId=" .. tostring(newWinId))
+            slot.win = reconnectedWin
+            slot.winId = newWinId
+            return slot
+        else
+            print(prefix .. " [VALIDATE] 槽位 " .. slotIndex .. " (" .. appName .. ") 重新连接成功但 winId 无效=" .. tostring(newWinId))
+            -- 仍然返回 slot，等待下次验证
+            slot.win = reconnectedWin
             return slot
         end
     end
     
-    -- winId 失效，尝试重新连接
-    print("[EdgeDock] 槽位 " .. slotIndex .. " 窗口句柄失效，尝试重新连接...")
-    local reconnectedWin = EdgeDock.tryReconnect(slot)
-    if reconnectedWin then
-        print("[EdgeDock] 槽位 " .. slotIndex .. " 重新连接成功")
-        slot.win = reconnectedWin
-        slot.winId = reconnectedWin:id()
-        return slot
-    end
-    
-    -- 窗口已关闭
+    -- 窗口已关闭或无法重新连接
+    print(prefix .. " [VALIDATE] 槽位 " .. slotIndex .. " (" .. appName .. ") 重新连接失败")
     return nil
 end
 
@@ -1113,6 +1161,9 @@ function EdgeDock.quickValidateSlot(slotIndex)
     local slot = EdgeDock.slots[slotIndex]
     if not slot then return nil end
     
+    local prefix = EdgeDock.logPrefix()
+    local oldWinId = slot.winId
+    
     -- 尝试通过 winId 获取窗口对象
     if slot.winId then
         local win = hs.window.get(slot.winId)
@@ -1123,10 +1174,13 @@ function EdgeDock.quickValidateSlot(slotIndex)
     end
     
     -- winId 失效，尝试重新连接
+    print(prefix .. " [QUICK_VALIDATE] 槽位 " .. slotIndex .. " (" .. (slot.appName or "unknown") .. ") winId=" .. tostring(oldWinId) .. " 失效，尝试重新连接...")
     local reconnectedWin = EdgeDock.tryReconnect(slot)
     if reconnectedWin then
+        local newWinId = reconnectedWin:id()
+        print(prefix .. " [QUICK_VALIDATE] 槽位 " .. slotIndex .. " 重新连接成功，新winId=" .. tostring(newWinId))
         slot.win = reconnectedWin
-        slot.winId = reconnectedWin:id()
+        slot.winId = newWinId
         return slot
     end
     
@@ -1223,7 +1277,41 @@ end
 
 -- 保存 Edge Dock 状态到文件
 function EdgeDock.saveState()
+    local prefix = EdgeDock.logPrefix()
     local state = {}
+    print(prefix .. " [SAVE_STATE] 开始保存状态，当前有 " .. #EdgeDock.slots .. " 个槽位")
+    
+    -- 检查是否有窗口处于异常状态（winId=0 或无效）
+    local hasInvalidWindow = false
+    for i = 1, EdgeDock.config.maxSlots do
+        local slot = EdgeDock.slots[i]
+        if slot and slot.winId then
+            local win = hs.window.get(slot.winId)
+            -- 检测异常状态：winId=0 或窗口获取失败
+            if slot.winId == 0 or not win then
+                hasInvalidWindow = true
+                print(prefix .. " [SAVE_STATE] 警告: 槽位 " .. i .. " (" .. slot.appName .. ") winId=" .. tostring(slot.winId) .. " 可能处于异常状态")
+            end
+        end
+    end
+    
+    -- 如果有异常窗口且不是休眠前的保存，尝试读取之前的状态来保留正确的 winId
+    local previousState = {}
+    if hasInvalidWindow then
+        local file = io.open(EDGEDOCK_STATE_FILE, "r")
+        if file then
+            local content = file:read("*all")
+            file:close()
+            local ok, decoded = pcall(function() return hs.json.decode(content) end)
+            if ok and decoded then
+                for _, item in ipairs(decoded) do
+                    previousState[item.slotIndex] = item
+                end
+                print(prefix .. " [SAVE_STATE] 已读取之前保存的状态用于恢复异常槽位")
+            end
+        end
+    end
+    
     for i = 1, EdgeDock.config.maxSlots do
         local slot = EdgeDock.slots[i]
         if not slot then goto continue end
@@ -1233,7 +1321,7 @@ function EdgeDock.saveState()
         local winTitle = slot.winTitle  -- 默认使用已保存的标题
         local winId = slot.winId        -- 默认使用已保存的 ID
         
-        if slot.winId then
+        if slot.winId and slot.winId ~= 0 then
             win = hs.window.get(slot.winId)
         end
         
@@ -1258,8 +1346,38 @@ function EdgeDock.saveState()
         end
         
         if win and win:isStandard() then
-            winTitle = win:title()  -- 更新窗口标题
-            winId = win:id()        -- 更新窗口 ID
+            local newWinId = win:id()
+            local newWinTitle = win:title()
+            -- 只有当新获取的 winId 有效时才更新（避免休眠时的异常状态覆盖正确状态）
+            if newWinId and newWinId ~= 0 then
+                winTitle = newWinTitle
+                winId = newWinId
+                print(prefix .. " [SAVE_STATE] 槽位 " .. i .. ": 更新 winId=" .. tostring(winId) .. ", title=[" .. tostring(winTitle) .. "]")
+            else
+                print(prefix .. " [SAVE_STATE] 槽位 " .. i .. ": 检测到无效 winId=" .. tostring(newWinId) .. "，保留原值 winId=" .. tostring(slot.winId))
+                -- 尝试从之前保存的状态恢复（如果当前也是无效值）
+                if (not winId or winId == 0) and previousState[i] and previousState[i].winId and previousState[i].winId ~= 0 then
+                    winId = previousState[i].winId
+                    winTitle = previousState[i].winTitle or slot.winTitle
+                    print(prefix .. " [SAVE_STATE] 槽位 " .. i .. ": 从之前状态恢复 winId=" .. tostring(winId))
+                end
+            end
+        else
+            -- 窗口暂时不可访问，保留之前保存的 winId 和标题
+            print(prefix .. " [SAVE_STATE] 槽位 " .. i .. ": 窗口暂时不可访问，保留原 winId=" .. tostring(winId) .. ", title=[" .. tostring(winTitle) .. "]")
+            -- 如果当前 winId 无效，尝试从之前保存的状态恢复
+            if (not winId or winId == 0) and previousState[i] and previousState[i].winId and previousState[i].winId ~= 0 then
+                winId = previousState[i].winId
+                winTitle = previousState[i].winTitle or slot.winTitle
+                print(prefix .. " [SAVE_STATE] 槽位 " .. i .. ": 从之前状态恢复 winId=" .. tostring(winId))
+            end
+        end
+        
+        -- 最后检查：确保不会保存 winId=0 或 nil
+        if not winId or winId == 0 then
+            print(prefix .. " [SAVE_STATE] 警告: 槽位 " .. i .. " winId 仍然无效，使用占位符保存")
+            -- 使用一个占位符，表示需要下次重新查找
+            winId = -1  -- 使用 -1 表示需要重新连接
         end
         
         -- 只要槽位数据存在就保存（即使窗口暂时不可访问）
@@ -1285,15 +1403,22 @@ function EdgeDock.saveState()
     if file then
         file:write(hs.json.encode(state))
         file:close()
-        print("[EdgeDock] 状态已保存: " .. #state .. " 个窗口")
+        print(prefix .. " [SAVE_STATE] 完成: " .. #state .. " 个窗口已保存到 " .. EDGEDOCK_STATE_FILE)
+        -- 打印详细保存信息
+        for _, item in ipairs(state) do
+            print(prefix .. " [SAVE_STATE]   槽位 " .. item.slotIndex .. ": app=" .. item.appName .. ", winId=" .. tostring(item.winId) .. ", title=[" .. tostring(item.winTitle) .. "]")
+        end
+    else
+        print(prefix .. " [SAVE_STATE] 错误: 无法写入文件 " .. EDGEDOCK_STATE_FILE)
     end
 end
 
 -- 从文件恢复 Edge Dock 状态
 function EdgeDock.restoreState()
+    local prefix = EdgeDock.logPrefix()
     local file = io.open(EDGEDOCK_STATE_FILE, "r")
     if not file then
-        print("[EdgeDock] 没有找到状态文件")
+        print(prefix .. " [RESTORE_STATE] 没有找到状态文件: " .. EDGEDOCK_STATE_FILE)
         -- 标记启动完成
         EdgeDock._startupComplete = true
         return
@@ -1304,11 +1429,13 @@ function EdgeDock.restoreState()
     
     local state = hs.json.decode(content)
     if not state or #state == 0 then
-        print("[EdgeDock] 状态文件为空")
+        print(prefix .. " [RESTORE_STATE] 状态文件为空")
         -- 标记启动完成
         EdgeDock._startupComplete = true
         return
     end
+    
+    print(prefix .. " [RESTORE_STATE] 开始恢复，文件中有 " .. #state .. " 个槽位记录")
     
     -- 延迟恢复，等待应用启动
     hs.timer.doAfter(1, function()
@@ -1319,14 +1446,20 @@ function EdgeDock.restoreState()
         
         for _, item in ipairs(state) do
             -- 查找应用
+            print(prefix .. " [RESTORE_STATE] 处理槽位 " .. item.slotIndex .. ": app=" .. item.appName .. ", savedWinId=" .. tostring(item.winId) .. ", savedTitle=[" .. tostring(item.winTitle) .. "]")
             local app = hs.application.get(item.appName)
             if not app then
                 -- 尝试启动应用
-                print("[EdgeDock] 尝试启动应用: " .. item.appName)
+                print(prefix .. " [RESTORE_STATE]   尝试启动应用: " .. item.appName)
                 hs.application.launchOrFocus(item.appName)
                 -- 等待应用启动
                 hs.timer.usleep(500000) -- 500ms
                 app = hs.application.get(item.appName)
+                if app then
+                    print(prefix .. " [RESTORE_STATE]   应用启动成功: " .. item.appName)
+                else
+                    print(prefix .. " [RESTORE_STATE]   应用启动失败: " .. item.appName)
+                end
             end
             
             if app then
@@ -1348,12 +1481,17 @@ function EdgeDock.restoreState()
                 
                 -- 匹配策略1: 优先通过 winId 匹配（如果窗口仍然存在）
                 if item.winId then
+                    print(prefix .. " [RESTORE_STATE]   尝试winId匹配: " .. tostring(item.winId))
                     for _, cand in ipairs(candidates) do
+                        print(prefix .. " [RESTORE_STATE]     检查候选: id=" .. tostring(cand.id) .. ", title=[" .. cand.title .. "]")
                         if cand.id == item.winId then
                             targetWin = cand.win
-                            print("[EdgeDock] 恢复时 winId 匹配成功: " .. item.appName .. ", id=" .. item.winId)
+                            print(prefix .. " [RESTORE_STATE]   winId匹配成功: " .. item.appName .. ", id=" .. tostring(item.winId))
                             break
                         end
+                    end
+                    if not targetWin then
+                        print(prefix .. " [RESTORE_STATE]   winId匹配失败: 没有候选窗口匹配 " .. tostring(item.winId))
                     end
                 end
                 
@@ -1390,6 +1528,7 @@ function EdgeDock.restoreState()
                 end
                 
                 if targetWin then
+                    print(prefix .. " [RESTORE_STATE]   槽位 " .. item.slotIndex .. " 恢复成功: " .. item.appName .. ", newWinId=" .. tostring(targetWin:id()))
                     -- 恢复 originalFrame
                     local frame = hs.geometry.rect(
                         item.originalFrame.x,
@@ -1433,14 +1572,15 @@ function EdgeDock.restoreState()
                     setWinFrame(targetWin, hs.geometry.rect(hideX, hideY, frame.w, frame.h))
                     
                     restoredCount = restoredCount + 1
-                    print("[EdgeDock] 恢复槽位 " .. item.slotIndex .. ": " .. item.appName)
                 else
-                    print("[EdgeDock] 未找到窗口: " .. item.appName)
+                    print(prefix .. " [RESTORE_STATE]   槽位 " .. item.slotIndex .. " 恢复失败: 未找到匹配窗口 (" .. item.appName .. ")")
                 end
             else
-                print("[EdgeDock] 应用未运行: " .. item.appName)
+                print(prefix .. " [RESTORE_STATE]   槽位 " .. item.slotIndex .. " 恢复失败: 应用未运行 (" .. item.appName .. ")")
             end
         end
+        
+        print(prefix .. " [RESTORE_STATE] 恢复完成: " .. restoredCount .. "/" .. #state .. " 个窗口已恢复")
         
         -- 刷新小条显示
         EdgeDock.refreshBars()
@@ -1561,6 +1701,7 @@ function EdgeDock.dockWindow(win, slotIndex)
     EdgeDock.slots[slotIndex] = {
         win = win,
         winId = win:id(),
+        winTitle = win:title() or "",  -- 保存窗口标题用于恢复时匹配
         originalFrame = frame,
         appName = app and app:name() or "?",
         isShowing = false,
@@ -1585,12 +1726,14 @@ end
 -- 辅助函数：尝试重新连接窗口
 -- 注意：此函数只在确认能找到原窗口时才返回窗口，否则返回 nil
 function EdgeDock.tryReconnect(slot)
+    local prefix = EdgeDock.logPrefix()
+    
     if not slot or not slot.appName then 
-        print("[EdgeDock] 重新连接失败: 槽位数据不完整")
+        print(prefix .. " [RECONNECT] 失败: 槽位数据不完整")
         return nil 
     end
     
-    print("[EdgeDock] 尝试重新连接: " .. slot.appName .. " (saved winId: " .. tostring(slot.winId) .. ", title: " .. tostring(slot.winTitle) .. ")")
+    print(prefix .. " [RECONNECT] 开始: app=" .. slot.appName .. ", savedWinId=" .. tostring(slot.winId) .. ", savedTitle=" .. tostring(slot.winTitle))
     
     -- 方法1: 通过 hs.application.get 查找
     local app = hs.application.get(slot.appName)
@@ -1621,33 +1764,79 @@ function EdgeDock.tryReconnect(slot)
     end
     
     if not app then
-        print("[EdgeDock] 重新连接失败: 找不到应用 " .. slot.appName)
+        print(prefix .. " [RECONNECT] 失败: 找不到应用 " .. slot.appName)
         return nil
     end
     
     -- 获取应用的所有窗口
     local windows = app:allWindows()
-    print("[EdgeDock] 应用 " .. slot.appName .. " 有 " .. #windows .. " 个窗口")
+    print(prefix .. " [RECONNECT] 应用 " .. slot.appName .. " 找到 " .. #windows .. " 个窗口")
     
     if #windows == 0 then
-        print("[EdgeDock] 重新连接失败: 应用 " .. slot.appName .. " 没有窗口")
+        print(prefix .. " [RECONNECT] 失败: 应用 " .. slot.appName .. " 没有窗口")
         return nil
     end
     
     local candidates = {}
+    local nonStandardCandidates = {}
     
-    -- 收集所有标准窗口
+    -- 收集所有窗口（包括非标准窗口作为备选）
     for _, win in ipairs(windows) do
+        local title = win:title() or ""
+        local id = win:id()
         if win:isStandard() then
-            local title = win:title() or ""
-            local id = win:id()
-            table.insert(candidates, {win = win, title = title, id = id})
-            print("[EdgeDock]   候选窗口: id=" .. id .. ", title=" .. title)
+            table.insert(candidates, {win = win, title = title, id = id, standard = true})
+            print(prefix .. " [RECONNECT]   标准窗口: id=" .. tostring(id) .. ", title=[" .. title .. "], matchWinId=" .. tostring(id == slot.winId))
+        else
+            table.insert(nonStandardCandidates, {win = win, title = title, id = id, standard = false})
+            print(prefix .. " [RECONNECT]   非标准窗口: id=" .. tostring(id) .. ", title=[" .. title .. "], matchWinId=" .. tostring(id == slot.winId))
+        end
+    end
+    
+    -- 休眠后特殊处理：某些应用（如微信）的窗口可能变成非标准窗口且 id=0
+    -- 但之后会自动恢复，此时应该优先尝试通过标题匹配
+    if #candidates == 0 and #nonStandardCandidates > 0 then
+        print(prefix .. " [RECONNECT] 警告: 应用 " .. slot.appName .. " 没有标准窗口，可能是休眠后的临时状态")
+        -- 休眠后，如果保存了标题，优先尝试通过标题在非标准窗口中匹配
+        -- 这适用于窗口暂时变成非标准但之后会恢复的情况
+        if slot.winTitle and slot.winTitle ~= "" then
+            for _, cand in ipairs(nonStandardCandidates) do
+                -- 微信等特殊处理：标题可能从 "Weixin" 变成 "WeChat"
+                if cand.title == slot.winTitle then
+                    print(prefix .. " [RECONNECT] 在非标准窗口中找到标题匹配: [" .. cand.title .. "]")
+                    -- 不立即返回，记录这个候选，等待窗口恢复为标准窗口
+                end
+            end
+        end
+    end
+    
+    -- 如果没有标准窗口，尝试使用非标准窗口（休眠后某些窗口可能暂时变成非标准）
+    if #candidates == 0 then
+        print(prefix .. " [RECONNECT] 警告: 应用 " .. slot.appName .. " 没有标准窗口，尝试使用非标准窗口")
+        if #nonStandardCandidates > 0 then
+            -- 优先使用有标题且 id ~= 0 的非标准窗口（更可能是有效窗口）
+            for _, cand in ipairs(nonStandardCandidates) do
+                if cand.title ~= "" and cand.id and cand.id ~= 0 then
+                    table.insert(candidates, cand)
+                end
+            end
+            -- 其次使用有标题的（无论 id 是什么）
+            if #candidates == 0 then
+                for _, cand in ipairs(nonStandardCandidates) do
+                    if cand.title ~= "" then
+                        table.insert(candidates, cand)
+                    end
+                end
+            end
+            -- 如果没有有标题的，全部加入
+            if #candidates == 0 then
+                candidates = nonStandardCandidates
+            end
         end
     end
     
     if #candidates == 0 then
-        print("[EdgeDock] 重新连接失败: 应用 " .. slot.appName .. " 没有标准窗口")
+        print(prefix .. " [RECONNECT] 失败: 应用 " .. slot.appName .. " 没有任何可用窗口")
         return nil
     end
     
@@ -1655,14 +1844,20 @@ function EdgeDock.tryReconnect(slot)
     
     -- 匹配策略1: 优先通过 winId 匹配（窗口仍然存在且 ID 未变）
     -- 这是休眠/唤醒后最常见的情况
-    if slot.winId then
+    -- 注意：winId=-1 是占位符，表示需要重新查找
+    if slot.winId and slot.winId ~= 0 and slot.winId ~= -1 then
         for _, cand in ipairs(candidates) do
             if cand.id == slot.winId then
                 targetWin = cand.win
-                print("[EdgeDock] 重新连接成功(winId匹配): " .. slot.appName .. ", id=" .. slot.winId)
+                print(prefix .. " [RECONNECT] 成功(winId匹配): " .. slot.appName .. ", id=" .. tostring(slot.winId))
                 break
             end
         end
+        if not targetWin then
+            print(prefix .. " [RECONNECT] winId=" .. tostring(slot.winId) .. " 没有匹配到任何候选窗口")
+        end
+    else
+        print(prefix .. " [RECONNECT] 没有有效的 savedWinId (" .. tostring(slot.winId) .. ")，跳过 winId 匹配")
     end
     
     -- 匹配策略2: 通过窗口标题匹配（ID 变化但标题相同）
@@ -1670,6 +1865,7 @@ function EdgeDock.tryReconnect(slot)
     if not targetWin and slot.winTitle and slot.winTitle ~= "" then
         local titleMatches = {}
         for _, cand in ipairs(candidates) do
+            -- 完全匹配
             if cand.title == slot.winTitle then
                 table.insert(titleMatches, cand)
             end
@@ -1678,13 +1874,54 @@ function EdgeDock.tryReconnect(slot)
         if #titleMatches == 1 then
             -- 只有一个匹配，认为是同一个窗口（标题唯一）
             targetWin = titleMatches[1].win
-            print("[EdgeDock] 重新连接成功(标题唯一匹配): " .. slot.appName .. ", title=" .. slot.winTitle)
+            print(prefix .. " [RECONNECT] 成功(标题唯一匹配): " .. slot.appName .. ", title=[" .. slot.winTitle .. "]")
         elseif #titleMatches > 1 then
             -- 多个窗口有相同标题，无法确定哪个是原来的
             -- 宁可不连接，也不要连错窗口
-            print("[EdgeDock] 重新连接失败: 有 " .. #titleMatches .. " 个窗口标题相同，无法确定原窗口: " .. slot.winTitle)
+            print(prefix .. " [RECONNECT] 失败: 有 " .. #titleMatches .. " 个窗口标题相同，无法确定原窗口: [" .. slot.winTitle .. "]")
             return nil
+        else
+            -- 没有完全匹配，尝试部分匹配（休眠后标题可能变化，如 Weixin -> WeChat）
+            print(prefix .. " [RECONNECT] 完全匹配失败，尝试部分匹配 savedTitle=[" .. slot.winTitle .. "]")
+            local partialMatches = {}
+            for _, cand in ipairs(candidates) do
+                -- 部分匹配：保存的标题包含在候选标题中，或候选标题包含在保存的标题中
+                -- 或者两者有共同的前缀/子串（至少3个字符）
+                local savedLower = string.lower(slot.winTitle)
+                local candLower = string.lower(cand.title)
+                local isMatch = false
+                
+                -- 互相包含
+                if string.find(candLower, savedLower, 1, true) or 
+                   string.find(savedLower, candLower, 1, true) then
+                    isMatch = true
+                end
+                
+                -- 或者应用名匹配（微信的特殊情况：Weixin/WeChat 都包含 Wei）
+                if not isMatch and slot.appName then
+                    local appLower = string.lower(slot.appName)
+                    if string.find(candLower, appLower, 1, true) or 
+                       string.find(appLower, candLower, 1, true) then
+                        isMatch = true
+                    end
+                end
+                
+                if isMatch then
+                    table.insert(partialMatches, cand)
+                end
+            end
+            
+            if #partialMatches == 1 then
+                targetWin = partialMatches[1].win
+                print(prefix .. " [RECONNECT] 成功(标题部分匹配): " .. slot.appName .. ", saved=[" .. slot.winTitle .. "], found=[" .. partialMatches[1].title .. "]")
+            elseif #partialMatches > 1 then
+                print(prefix .. " [RECONNECT] 部分匹配也有多个结果，放弃匹配")
+            else
+                print(prefix .. " [RECONNECT] 标题匹配失败: 没有窗口标题匹配 [" .. slot.winTitle .. "]")
+            end
         end
+    elseif not targetWin then
+        print(prefix .. " [RECONNECT] 跳过标题匹配: savedTitle=" .. tostring(slot.winTitle))
     end
     
     -- 匹配策略3: 如果应用只有一个窗口且原窗口没有标题
@@ -1692,19 +1929,21 @@ function EdgeDock.tryReconnect(slot)
     if not targetWin and (not slot.winTitle or slot.winTitle == "") then
         if #candidates == 1 then
             targetWin = candidates[1].win
-            print("[EdgeDock] 重新连接成功(单窗口无标题): " .. slot.appName)
+            print(prefix .. " [RECONNECT] 成功(单窗口无标题): " .. slot.appName)
         else
-            print("[EdgeDock] 重新连接失败: 应用有 " .. #candidates .. " 个窗口且原窗口无标题，无法确定")
+            print(prefix .. " [RECONNECT] 失败: 应用有 " .. #candidates .. " 个窗口且原窗口无标题，无法确定")
             return nil
         end
     end
     
     if targetWin then
+        local newId = targetWin:id()
         slot.win = targetWin
-        slot.winId = targetWin:id()
+        slot.winId = newId
+        print(prefix .. " [RECONNECT] 最终成功: app=" .. slot.appName .. ", newWinId=" .. tostring(newId))
         return targetWin
     else
-        print("[EdgeDock] 重新连接失败: 无法找到原窗口 " .. slot.appName .. "/" .. tostring(slot.winTitle))
+        print(prefix .. " [RECONNECT] 最终失败: app=" .. slot.appName .. ", savedTitle=" .. tostring(slot.winTitle))
     end
     
     return nil
@@ -1931,30 +2170,37 @@ end)
 
 -- 应用关闭检测
 EdgeDock.appWatcher = hs.application.watcher.new(function(appName, eventType, appObj)
+    local prefix = EdgeDock.logPrefix()
     if eventType == hs.application.watcher.terminated then
-        print("[EdgeDock] 收到应用关闭事件: " .. (appName or "unknown"))
+        print(prefix .. " [APP_WATCHER] 收到应用关闭事件: " .. (appName or "unknown") .. ", 延迟5秒后检查...")
         -- 增加延迟到 5 秒，给系统更多恢复时间，避免误判休眠唤醒为应用关闭
         hs.timer.doAfter(5, function()
             -- 检查所有槽位
             local changed = false
+            print(prefix .. " [APP_WATCHER] 开始检查槽位 (触发应用: " .. (appName or "unknown") .. ")")
             for i = 1, EdgeDock.config.maxSlots do
                 local slot = EdgeDock.slots[i]
                 if slot then
                     if slot.appName == appName then
-                        print("[EdgeDock] 检查槽位 " .. i .. " (应用: " .. slot.appName .. ")")
+                        print(prefix .. " [APP_WATCHER] 检查槽位 " .. i .. " (应用: " .. slot.appName .. ", winId=" .. tostring(slot.winId) .. ")")
                         -- 使用 validateSlot 来验证和重新连接
                         local validSlot = EdgeDock.validateSlot(i)
                         if not validSlot then
-                            print("[EdgeDock] 槽位 " .. i .. " 确认关闭，清理槽位")
+                            print(prefix .. " [APP_WATCHER] 槽位 " .. i .. " 确认关闭，清理槽位")
                             EdgeDock.slots[i] = nil
                             changed = true
+                        else
+                            print(prefix .. " [APP_WATCHER] 槽位 " .. i .. " 验证通过（可能是误报）")
                         end
                     end
                 end
             end
             if changed then
+                print(prefix .. " [APP_WATCHER] 有槽位被清理，刷新界面并保存状态")
                 EdgeDock.refreshBars()
                 EdgeDock.saveState()
+            else
+                print(prefix .. " [APP_WATCHER] 没有槽位需要清理")
             end
         end)
     end
@@ -1970,37 +2216,87 @@ end)
 
 -- 系统休眠/唤醒监听
 EdgeDock.caffeinateWatcher = hs.caffeinate.watcher.new(function(eventType)
+    local prefix = EdgeDock.logPrefix()
     if eventType == hs.caffeinate.watcher.systemDidWake then
-        print("[EdgeDock] 系统唤醒，刷新小条")
-        -- 唤醒后立即尝试恢复窗口引用（不清理）
-        -- 延迟增加到 5 秒，某些应用在唤醒后需要更长时间恢复窗口
+        print(prefix .. " [CAFFEINATE] ====== 系统唤醒 ======")
+        print(prefix .. " [CAFFEINATE] 当前槽位状态:")
+        for i = 1, EdgeDock.config.maxSlots do
+            local slot = EdgeDock.slots[i]
+            if slot then
+                print(prefix .. " [CAFFEINATE]   槽位 " .. i .. ": app=" .. slot.appName .. ", winId=" .. tostring(slot.winId) .. ", isShowing=" .. tostring(slot.isShowing))
+            else
+                print(prefix .. " [CAFFEINATE]   槽位 " .. i .. ": 空")
+            end
+        end
+        -- 唤醒后先暂停验证定时器，避免在窗口恢复过程中误判
+        if EdgeDock.validationTimer then
+            print(prefix .. " [CAFFEINATE] 暂停验证定时器，等待窗口恢复...")
+            EdgeDock.validationTimer:stop()
+        end
+        -- 延迟 5 秒后恢复验证定时器并验证槽位
+        print(prefix .. " [CAFFEINATE] 5秒后开始验证槽位...")
         hs.timer.doAfter(5, function()
+            print(prefix .. " [CAFFEINATE] 开始验证槽位...")
             -- 唤醒后强制验证所有槽位，优先尝试重新连接
             local reconnectedCount = 0
+            local failedSlots = {}
             for i = 1, EdgeDock.config.maxSlots do
                 local slot = EdgeDock.slots[i]
                 if slot then
+                    print(prefix .. " [CAFFEINATE] 验证槽位 " .. i .. " (" .. slot.appName .. ")...")
                     local validSlot = EdgeDock.validateSlot(i)
                     if validSlot then
                         reconnectedCount = reconnectedCount + 1
+                        print(prefix .. " [CAFFEINATE] 槽位 " .. i .. " 验证成功，新winId=" .. tostring(validSlot.winId))
                         -- 确保窗口还在隐藏位置
                         if slot.isShowing then
+                            print(prefix .. " [CAFFEINATE] 槽位 " .. i .. " 之前在显示状态，重新隐藏")
                             EdgeDock.hideWindow(i)
                         end
                     else
-                        print("[EdgeDock] 唤醒后槽位 " .. i .. " 无法重新连接，清理")
+                        print(prefix .. " [CAFFEINATE] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 无法重新连接，将被清理")
+                        table.insert(failedSlots, i .. "(" .. (slot.appName or "?") .. ")")
                         EdgeDock.slots[i] = nil
                     end
+                else
+                    print(prefix .. " [CAFFEINATE] 槽位 " .. i .. " 为空，跳过")
                 end
             end
             EdgeDock.refreshBars()
             EdgeDock.refreshMask()
             EdgeDock.saveState()
-            print("[EdgeDock] 唤醒恢复完成，重新连接 " .. reconnectedCount .. " 个窗口")
+            -- 恢复验证定时器
+            if EdgeDock.validationTimer then
+                print(prefix .. " [CAFFEINATE] 恢复验证定时器")
+                EdgeDock.validationTimer:start()
+            end
+            print(prefix .. " [CAFFEINATE] ====== 唤醒恢复完成 ======")
+            print(prefix .. " [CAFFEINATE] 结果: " .. reconnectedCount .. " 个成功, 失败: " .. table.concat(failedSlots, ", "))
         end)
     elseif eventType == hs.caffeinate.watcher.systemWillSleep then
-        print("[EdgeDock] 系统即将休眠，保存状态")
+        print(prefix .. " [CAFFEINATE] ====== 系统即将休眠 ======")
+        print(prefix .. " [CAFFEINATE] 当前槽位状态:")
+        for i = 1, EdgeDock.config.maxSlots do
+            local slot = EdgeDock.slots[i]
+            if slot then
+                print(prefix .. " [CAFFEINATE]   槽位 " .. i .. ": app=" .. slot.appName .. ", winId=" .. tostring(slot.winId) .. ", title=[" .. tostring(slot.winTitle) .. "]")
+            else
+                print(prefix .. " [CAFFEINATE]   槽位 " .. i .. ": 空")
+            end
+        end
+        -- 休眠前暂停验证定时器，避免休眠期间误判
+        if EdgeDock.validationTimer then
+            print(prefix .. " [CAFFEINATE] 暂停验证定时器")
+            EdgeDock.validationTimer:stop()
+        end
         EdgeDock.saveState()
+        print(prefix .. " [CAFFEINATE] ====== 休眠准备完成 ======")
+    elseif eventType == hs.caffeinate.watcher.screensDidWake then
+        -- 屏幕唤醒时恢复验证定时器（如果还没启动）
+        if EdgeDock.validationTimer and not EdgeDock.validationTimer:running() then
+            print(prefix .. " [CAFFEINATE] 屏幕唤醒，恢复验证定时器")
+            EdgeDock.validationTimer:start()
+        end
     end
 end)
 
@@ -2111,22 +2407,152 @@ function EdgeDock.start()
     EdgeDock.appearanceWatcher:start()
     
     -- 启动定期验证定时器（每 5 秒验证一次槽位，清理已关闭的窗口）
+    -- 使用失败计数器：连续 3 次验证失败才清理，避免窗口暂时不可用时被误清理
     EdgeDock.validationTimer = hs.timer.doEvery(5, function()
+        local prefix = EdgeDock.logPrefix()
         local changed = false
+        
+        -- 检查系统是否正在休眠或锁屏（通过检查电源状态和屏幕状态）
+        -- 如果正在休眠/唤醒/锁屏过程中，跳过本次验证
+        local isSystemAwake = true
+        
+        -- 方法1: 检查电源状态
+        local powerHandle = io.popen("pmset -g systemstate 2>/dev/null | grep -i 'sleep' | head -1")
+        if powerHandle then
+            local powerState = powerHandle:read("*l") or ""
+            powerHandle:close()
+            if powerState ~= "" and string.find(string.lower(powerState), "sleep") then
+                print(prefix .. " [VALIDATION_TIMER] 系统正在休眠（systemstate），跳过验证")
+                isSystemAwake = false
+            end
+        end
+        
+        -- 方法2: 检查屏幕是否锁定（通过会话状态）
+        if isSystemAwake then
+            local sessionHandle = io.popen("ls -la /tmp/com.apple.ScreenSharing* 2>/dev/null | wc -l")
+            if sessionHandle then
+                local count = tonumber(sessionHandle:read("*l")) or 0
+                sessionHandle:close()
+                -- 这个方法不太可靠，仅作为参考
+            end
+        end
+        
+        -- 方法3: 检查系统是否刚唤醒（通过检查 CGSession 状态）
+        if isSystemAwake then
+            local cgHandle = io.popen("ps aux | grep -i 'coregraphics' | grep -v grep | wc -l")
+            if cgHandle then
+                cgHandle:close()  -- 这个方法也不太准确
+            end
+        end
+        
+        -- 如果验证定时器被显式暂停（如休眠期间），也跳过
+        if not isSystemAwake then
+            return
+        end
+        
+        -- 额外检查：如果所有窗口都是非标准且 id=0，可能是系统正在恢复中
+        local allAbnormal = true
+        local hasAnyWindow = false
         for i = 1, EdgeDock.config.maxSlots do
             local slot = EdgeDock.slots[i]
-            if slot then
-                -- 使用 validateSlot 进行验证，包含重新连接逻辑
-                local validSlot = EdgeDock.validateSlot(i)
-                if not validSlot then
-                    -- 窗口确实已关闭，清理槽位
-                    print("[EdgeDock] 槽位 " .. i .. " 窗口已关闭，清理槽位")
-                    EdgeDock.slots[i] = nil
-                    changed = true
+            if slot and slot.winId and slot.winId ~= 0 then
+                local win = hs.window.get(slot.winId)
+                if win then
+                    hasAnyWindow = true
+                    if win:isStandard() then
+                        allAbnormal = false
+                        break
+                    end
                 end
             end
         end
+        if hasAnyWindow and allAbnormal then
+            print(prefix .. " [VALIDATION_TIMER] 检测到所有窗口都是非标准状态，系统可能正在恢复，跳过验证")
+            return
+        end
+        
+        for i = 1, EdgeDock.config.maxSlots do
+            local slot = EdgeDock.slots[i]
+            if slot then
+                -- 先检查应用是否还在运行
+                local app = hs.application.get(slot.appName)
+                if not app then
+                    -- 应用已关闭，尝试通过 bundle ID 查找
+                    local bundleMap = {
+                        ["WeChat"] = "com.tencent.xinWeChat",
+                        ["Music"] = "com.apple.Music",
+                        ["ChatGPT"] = "com.openai.chat",
+                        ["Safari"] = "com.apple.Safari",
+                        ["Chrome"] = "com.google.Chrome",
+                    }
+                    local bundleID = bundleMap[slot.appName]
+                    if bundleID then
+                        app = hs.application.get(bundleID)
+                    end
+                end
+                
+                if not app then
+                    -- 应用确实已关闭，直接清理槽位
+                    print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 应用已关闭，清理槽位")
+                    EdgeDock.slots[i] = nil
+                    changed = true
+                    goto continue_slot
+                end
+                
+                -- 应用还在运行，使用 validateSlot 进行验证
+                local validSlot = EdgeDock.validateSlot(i)
+                if not validSlot then
+                    -- 验证失败，检查是否是窗口异常状态（如 winId=0 或窗口非标准）
+                    -- 如果是异常状态，不增加失败计数，等待窗口恢复
+                    local isAbnormalState = false
+                    
+                    -- 检查1: winId 为 0 或 -1（无效值）
+                    if not slot.winId or slot.winId == 0 or slot.winId == -1 then
+                        isAbnormalState = true
+                        print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") winId=" .. tostring(slot.winId) .. " 无效，可能是休眠后的临时状态，跳过")
+                    else
+                        -- 检查2: 窗口存在但变成非标准窗口（休眠后常见）
+                        local win = hs.window.get(slot.winId)
+                        if win and not win:isStandard() then
+                            isAbnormalState = true
+                            print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 窗口暂时为非标准状态，跳过")
+                        elseif not win then
+                            -- 检查3: 窗口获取失败但应用还在运行（可能是暂时的）
+                            -- 检查应用是否还在运行
+                            local app = hs.application.get(slot.appName)
+                            if app then
+                                -- 应用还在，但窗口获取不到，可能是暂时的
+                                isAbnormalState = true
+                                print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 应用还在但窗口获取失败，可能是临时状态，跳过")
+                            end
+                        end
+                    end
+                    
+                    if not isAbnormalState then
+                        -- 真正的验证失败，增加失败计数
+                        slot.failCount = (slot.failCount or 0) + 1
+                        print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 验证失败，失败次数=" .. slot.failCount)
+                        
+                        -- 连续 3 次失败才清理（给窗口恢复留出时间）
+                        if slot.failCount >= 3 then
+                            print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 连续3次验证失败，清理槽位")
+                            EdgeDock.slots[i] = nil
+                            changed = true
+                        end
+                    end
+                else
+                    -- 验证成功，重置失败计数
+                    if slot.failCount and slot.failCount > 0 then
+                        print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 验证恢复，重置失败计数")
+                        slot.failCount = 0
+                    end
+                end
+                
+                ::continue_slot::
+            end
+        end
         if changed then
+            print(prefix .. " [VALIDATION_TIMER] 有槽位被清理，刷新界面并保存状态")
             EdgeDock.refreshBars()
             EdgeDock.saveState()
         end
