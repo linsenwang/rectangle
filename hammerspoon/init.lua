@@ -698,6 +698,8 @@ function TileManager.tile(appName, spacing)
     notify("平铺完成", appName .. " " .. count .. " 个窗口" .. spacingText)
 end
 
+
+
 -- 平铺所有应用的窗口
 -- @param spacing 间距（可选，默认使用 TileManager.config.spacing）
 function TileManager.tileAll(spacing)
@@ -706,7 +708,10 @@ function TileManager.tileAll(spacing)
     local allWindows = {}
     for _, win in ipairs(hs.window.allWindows()) do
         if win:isStandard() and win:application() then
-            table.insert(allWindows, win)
+            -- 排除 Edge Dock 中停靠的窗口
+            if not TileManager.isWindowInEdgeDock(win) then
+                table.insert(allWindows, win)
+            end
         end
     end
     
@@ -2753,6 +2758,23 @@ end
 
 -- 启动
 EdgeDock.start()
+
+-- ============================================
+-- TileManager 辅助函数（必须在 EdgeDock 定义后）
+-- ============================================
+
+-- 检查窗口是否在 Edge Dock 中
+function TileManager.isWindowInEdgeDock(win)
+    if not win then return false end
+    local winId = win:id()
+    for i = 1, EdgeDock.config.maxSlots do
+        local slot = EdgeDock.slots[i]
+        if slot and slot.winId == winId then
+            return true
+        end
+    end
+    return false
+end
 
 -- ============================================
 -- 启动提示
