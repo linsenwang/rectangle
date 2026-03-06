@@ -579,15 +579,54 @@ hs.hotkey.bind({"ctrl", "alt", "cmd"}, "r", function()
 end)
 
 -- ============================================
--- 高级功能：子窗口平铺
+-- 高级功能：窗口平铺
 -- ============================================
 
 local TileManager = {}
 TileManager.originalLayouts = {}
 
-function TileManager.tile(appName)
-    local app = hs.application.get(appName)
-    if not app then return end
+-- 平铺配置
+TileManager.config = {
+    spacing = 0,  -- 默认间距（可以是负数，表示重叠）
+}
+
+-- 计算最优行列数（使布局接近正方形）
+function TileManager.calcGrid(count)
+    if count <= 0 then return 0, 0 end
+    if count == 1 then return 1, 1 end
+    if count == 2 then return 2, 1 end
+    if count == 3 then return 3, 1 end
+    if count == 4 then return 2, 2 end
+    if count == 5 then return 3, 2 end
+    if count == 6 then return 3, 2 end
+    
+    -- 对于更多窗口，计算接近正方形的布局
+    local cols = math.ceil(math.sqrt(count))
+    local rows = math.ceil(count / cols)
+    return cols, rows
+end
+
+-- 平铺指定应用的窗口
+-- @param appName 应用名称（可选，不传则平铺当前应用）
+-- @param spacing 间距（可选，默认使用 TileManager.config.spacing）
+function TileManager.tile(appName, spacing)
+    spacing = spacing or TileManager.config.spacing
+    
+    local app
+    if appName then
+        app = hs.application.get(appName)
+    else
+        local win = hs.window.focusedWindow()
+        if win then
+            app = win:application()
+            appName = app:name()
+        end
+    end
+    
+    if not app then
+        notify("平铺失败", "应用未找到")
+        return
+    end
     
     local windows = {}
     for _, win in ipairs(app:allWindows()) do
@@ -597,7 +636,14 @@ function TileManager.tile(appName)
     end
     
     local count = #windows
-    if count == 0 then return end
+    if count == 0 then
+        notify("平铺失败", "没有找到可平铺的窗口")
+        return
+    end
+    if count == 1 then
+        notify("平铺提示", "只有1个窗口，无需平铺")
+        return
+    end
     
     local key = appName .. "_original"
     if not TileManager.originalLayouts[key] then
@@ -608,31 +654,141 @@ function TileManager.tile(appName)
         TileManager.originalLayouts[key] = original
     end
     
-    local max = hs.screen.mainScreen():frame()
-    local cols = math.ceil(math.sqrt(count))
-    local rows = math.ceil(count / cols)
-    local cellW = max.w / cols
-    local cellH = max.h / rows
+    local screen = hs.screen.mainScreen():frame()
+    local area = getUsableArea(screen)
+    local cols, rows = TileManager.calcGrid(count)
+    
+    -- 计算每个单元格的基础尺寸（不考虑间距）
+    local cellW = area.w / cols
+    local cellH = area.h / rows
     
     for i, win in ipairs(windows) do
         local col = (i - 1) % cols
         local row = math.floor((i - 1) / cols)
-        local margin = 4
-        setWinFrame(win, hs.geometry.rect(
-            max.x + col * cellW + margin,
-            max.y + row * cellH + margin,
-            cellW - margin * 2,
-            cellH - margin * 2
-        ))
+        
+        -- 计算窗口尺寸
+        -- 正间距：窗口缩小，留有间隙
+        -- 零间距：窗口填满单元格
+        -- 负间距：窗口变大，彼此重叠（但不超过可用区域边界）
+        local w = cellW - spacing * 2
+        local h = cellH - spacing * 2
+        
+        -- 计算窗口位置（单元格中心）
+        local cellCenterX = area.x + col * cellW + cellW / 2
+        local cellCenterY = area.y + row * cellH + cellH / 2
+        
+        -- 窗口以单元格中心为基准放置
+        local x = cellCenterX - w / 2
+        local y = cellCenterY - h / 2
+        
+        -- 确保窗口不超出可用区域（保留 margin）
+        if x < area.x then x = area.x end
+        if y < area.y then y = area.y end
+        if x + w > area.x + area.w then w = area.x + area.w - x end
+        if y + h > area.y + area.h then h = area.y + area.h - y end
+        
+        -- 确保窗口大小为正数
+        w = math.max(w, 100)
+        h = math.max(h, 100)
+        
+        setWinFrame(win, hs.geometry.rect(x, y, w, h))
     end
     
-    notify("平铺完成", appName .. " " .. count .. " 个窗口")
+    local spacingText = spacing == 0 and "" or " (间距: " .. spacing .. "px)"
+    notify("平铺完成", appName .. " " .. count .. " 个窗口" .. spacingText)
 end
 
+-- 平铺所有应用的窗口
+-- @param spacing 间距（可选，默认使用 TileManager.config.spacing）
+function TileManager.tileAll(spacing)
+    spacing = spacing or TileManager.config.spacing
+    
+    local allWindows = {}
+    for _, win in ipairs(hs.window.allWindows()) do
+        if win:isStandard() and win:application() then
+            table.insert(allWindows, win)
+        end
+    end
+    
+    local count = #allWindows
+    if count == 0 then
+        notify("平铺失败", "没有找到可平铺的窗口")
+        return
+    end
+    if count == 1 then
+        notify("平铺提示", "只有1个窗口，无需平铺")
+        return
+    end
+    
+    -- 保存所有窗口的原始布局
+    local key = "_all_windows_"
+    if not TileManager.originalLayouts[key] then
+        local original = {}
+        for _, win in ipairs(allWindows) do
+            table.insert(original, {id = win:id(), frame = win:frame()})
+        end
+        TileManager.originalLayouts[key] = original
+    end
+    
+    local screen = hs.screen.mainScreen():frame()
+    local area = getUsableArea(screen)
+    local cols, rows = TileManager.calcGrid(count)
+    
+    -- 计算每个单元格的基础尺寸（不考虑间距）
+    local cellW = area.w / cols
+    local cellH = area.h / rows
+    
+    for i, win in ipairs(allWindows) do
+        local col = (i - 1) % cols
+        local row = math.floor((i - 1) / cols)
+        
+        -- 计算窗口尺寸
+        -- 正间距：窗口缩小，留有间隙
+        -- 零间距：窗口填满单元格
+        -- 负间距：窗口变大，彼此重叠（但不超过可用区域边界）
+        local w = cellW - spacing * 2
+        local h = cellH - spacing * 2
+        
+        -- 计算窗口位置（单元格中心）
+        local cellCenterX = area.x + col * cellW + cellW / 2
+        local cellCenterY = area.y + row * cellH + cellH / 2
+        
+        -- 窗口以单元格中心为基准放置
+        local x = cellCenterX - w / 2
+        local y = cellCenterY - h / 2
+        
+        -- 确保窗口不超出可用区域（保留 margin）
+        if x < area.x then x = area.x end
+        if y < area.y then y = area.y end
+        if x + w > area.x + area.w then w = area.x + area.w - x end
+        if y + h > area.y + area.h then h = area.y + area.h - y end
+        
+        -- 确保窗口大小为正数
+        w = math.max(w, 100)
+        h = math.max(h, 100)
+        
+        setWinFrame(win, hs.geometry.rect(x, y, w, h))
+    end
+    
+    local spacingText = spacing == 0 and "" or " (间距: " .. spacing .. "px)"
+    notify("全局平铺完成", "共 " .. count .. " 个窗口" .. spacingText)
+end
+
+-- 恢复平铺前的布局
+-- @param appName 应用名称（可选，不传则恢复当前应用）
 function TileManager.restore(appName)
-    local key = appName .. "_original"
+    local key
+    if appName then
+        key = appName .. "_original"
+    else
+        key = "_all_windows_"
+    end
+    
     local original = TileManager.originalLayouts[key]
-    if not original then return end
+    if not original then
+        notify("恢复失败", "没有找到保存的布局")
+        return
+    end
     
     for _, item in ipairs(original) do
         local win = hs.window.get(item.id)
@@ -642,22 +798,60 @@ function TileManager.restore(appName)
     end
     
     TileManager.originalLayouts[key] = nil
-    notify("已恢复", appName)
+    notify("已恢复", appName or "所有窗口")
 end
 
-function TileManager.tileCurrent()
-    local win = hs.window.focusedWindow()
-    if win then TileManager.tile(win:application():name()) end
-end
-
+-- 恢复当前应用的布局
 function TileManager.restoreCurrent()
     local win = hs.window.focusedWindow()
-    if win then TileManager.restore(win:application():name()) end
+    if win then
+        TileManager.restore(win:application():name())
+    else
+        -- 如果没有聚焦窗口，尝试恢复全局布局
+        TileManager.restore(nil)
+    end
 end
 
--- 平铺快捷键
-hs.hotkey.bind({"ctrl", "alt", "cmd"}, "t", TileManager.tileCurrent)
+-- 设置间距
+function TileManager.setSpacing(spacing)
+    TileManager.config.spacing = spacing or 0
+    notify("平铺间距已设置", "当前间距: " .. TileManager.config.spacing .. "px")
+end
+
+-- 平铺当前应用的所有窗口
+function TileManager.tileCurrent(spacing)
+    spacing = spacing or TileManager.config.spacing
+    TileManager.tile(nil, spacing)
+end
+
+-- 平铺快捷键：当前应用（Ctrl+Opt+Cmd+T）
+hs.hotkey.bind({"ctrl", "alt", "cmd"}, "t", function()
+    TileManager.tileCurrent()
+end)
+
+-- 平铺快捷键：所有应用（Ctrl+Opt+Cmd+A）
+hs.hotkey.bind({"ctrl", "alt", "cmd"}, "a", function()
+    TileManager.tileAll()
+end)
+
+-- 恢复平铺快捷键（Ctrl+Opt+Cmd+O）
 hs.hotkey.bind({"ctrl", "alt", "cmd"}, "o", TileManager.restoreCurrent)
+
+-- 设置间距快捷键（Ctrl+Opt+Cmd+;）
+hs.hotkey.bind({"ctrl", "alt", "cmd"}, ";", function()
+    local button, text = hs.dialog.textPrompt("设置平铺间距", 
+        "输入间距（像素，可以是负数）：", 
+        tostring(TileManager.config.spacing), 
+        "确定", "取消")
+    if button == "确定" and text ~= "" then
+        local spacing = tonumber(text)
+        if spacing ~= nil then
+            TileManager.setSpacing(spacing)
+        else
+            notify("设置失败", "请输入有效的数字")
+        end
+    end
+end)
 
 -- ============================================
 -- 窗口靠在最左/最右（保持高度和宽度不变，贴到屏幕边缘）
