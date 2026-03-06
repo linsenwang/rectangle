@@ -2220,9 +2220,10 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
             EdgeDock.refreshBars()
             EdgeDock.refreshMask()
             -- 如果有正在显示的窗口，先隐藏它（避免窗口留在旧屏幕）
+            -- 但处于居中暂停状态的窗口保持显示
             for i = 1, EdgeDock.config.maxSlots do
                 local slot = EdgeDock.slots[i]
-                if slot and slot.isShowing then
+                if slot and slot.isShowing and not slot.centeredPaused then
                     EdgeDock.hideWindow(i)
                 end
             end
