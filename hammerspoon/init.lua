@@ -698,24 +698,23 @@ local EdgeDock = {
     slots = {},             -- 槽位 {win, originalFrame, appName, isShowing, hideTimer}
     bars = {},              -- 小条 UI 元素
     mask = nil,             -- 右侧遮罩条（遮挡可能露出的窗口边缘）
-    dragState = {           -- 拖拽状态
-        isDragging = false,
-        dragWin = nil,
-        dragStartPos = nil,
-        dragStartFrame = nil,
-        highlightedSlot = nil,  -- 当前高亮的槽位
-    },
     currentBarScreen = nil,  -- 当前小条所在的屏幕（用于多显示器检测）
     config = {
         maxSlots = 7,       -- 最大槽位数
         barWidth = 3,       -- 小条宽度
-        topMargin = 6,    -- 顶部边距（距离屏幕上边缘）
-        bottomMargin = 6, -- 底部边距（距离屏幕下边缘）
+        topMargin = 6,      -- 顶部边距（距离屏幕上边缘）
+        bottomMargin = 6,   -- 底部边距（距离屏幕下边缘）
         barGap = 10,        -- 小条之间的空隙
         peekWidth = 1,      -- 窗口 peek 出来的宽度
         hideDelay = 0,      -- 鼠标离开后多久收起（秒）
-        dragThreshold = 6, -- 拖拽检测阈值（像素）
         centeredPause = true,  -- 居中后暂停鼠标移出检测
+        -- 鼠标触发范围配置（像素）
+        triggerRange = {
+            leftExtend = 7,   -- 槽位左侧向左扩展的触发范围
+            rightExtend = 5,   -- 屏幕右边缘向右扩展的触发范围
+            topExtend = 5,     -- 槽位顶部向上扩展的触发范围
+            bottomExtend = 5,  -- 槽位底部向下扩展的触发范围
+        },
         -- 深色/浅色模式颜色配置
         colors = {
             dark = {
@@ -829,7 +828,7 @@ function EdgeDock.getKnownAppColor(appName)
     return color
 end
 
--- 获取应用图标的平均颜色
+-- 获取应用图标的颜色
 function EdgeDock.getAppIconColor(appName)
     -- 获取当前模式用于缓存键
     local mode = EdgeDock.getAppearanceMode()
@@ -849,126 +848,14 @@ function EdgeDock.getAppIconColor(appName)
         return color
     end
     
-    -- 2. 尝试获取应用的实际图标
-    local app = hs.application.get(appName)
-    if not app then 
-        return EdgeDock.generateColorFromName(appName)
-    end
-    
-    -- 安全获取图标
-    local success, icon = pcall(function() return app:icon() end)
-    if not success or not icon then 
-        return EdgeDock.generateColorFromName(appName)
-    end
-    
-    -- 3. 尝试通过 bundle 路径获取图标文件
-    local bundlePath = app:path()
-    if bundlePath then
-        local color = EdgeDock.extractColorFromIconBundle(bundlePath)
-        if color then
-            EdgeDock.appColorCache[cacheKey] = color
-            return color
-        end
-    end
-    
-    -- 4. 备选：使用名称生成颜色
+    -- 2. 使用名称生成颜色
     local color = EdgeDock.generateColorFromName(appName)
     color.alpha = 0.3
     EdgeDock.appColorCache[cacheKey] = color
     return color
 end
 
--- 从应用 bundle 提取图标颜色
-function EdgeDock.extractColorFromIconBundle(bundlePath)
-    -- 查找 .icns 文件
-    local iconPath = nil
-    
-    -- 先尝试读取 Info.plist 中的 CFBundleIconFile
-    local plistCmd = "defaults read '" .. bundlePath .. "/Contents/Info' CFBundleIconFile 2>/dev/null"
-    local handle = io.popen(plistCmd)
-    local iconFile = handle and handle:read("*l")
-    if handle then handle:close() end
-    
-    if iconFile then
-        iconFile = iconFile:gsub("^%s*", ""):gsub("%s*$", ""):gsub("^\"", ""):gsub("\"$", "")
-        iconFile = iconFile:gsub("%.icns$", "")
-        
-        -- 尝试多个可能的路径
-        local paths = {
-            bundlePath .. "/Contents/Resources/" .. iconFile .. ".icns",
-            bundlePath .. "/Contents/Resources/" .. iconFile,
-        }
-        for _, p in ipairs(paths) do
-            local f = io.open(p, "r")
-            if f then f:close() iconPath = p break end
-        end
-    end
-    
-    -- 如果没找到，查找 Resources 目录下的任意 .icns
-    if not iconPath then
-        local findCmd = "find '" .. bundlePath .. "/Contents/Resources' -name '*.icns' -type f 2>/dev/null | head -1"
-        local findHandle = io.popen(findCmd)
-        iconPath = findHandle and findHandle:read("*l")
-        if findHandle then findHandle:close() end
-    end
-    
-    if not iconPath then return nil end
-    
-    -- 使用 sips 提取颜色直方图的主要颜色
-    -- 方法：转换为小的位图然后采样几个像素
-    local tmpFile = os.tmpname()
-    
-    -- 提取第一个图标并缩放到 1x1 来获取平均颜色（但这样太模糊了）
-    -- 更好的方法：提取到 4x4 然后分析
-    local cmd = "sips -s format png '" .. iconPath .. "' -o '" .. tmpFile .. "' --resampleWidth 4 2>/dev/null"
-    os.execute(cmd)
-    
-    -- 读取 PNG 文件并解析（简化：直接读取文件找颜色特征）
-    local f = io.open(tmpFile, "rb")
-    local color = nil
-    
-    if f then
-        local data = f:read("*all")
-        f:close()
-        
-        -- 简单启发式：在 PNG 数据中寻找最常见的非透明颜色
-        -- PNG 的 IDAT 块包含压缩后的像素数据
-        -- 我们采样几个固定位置的字节
-        if data and #data > 100 then
-            -- 跳过 PNG 头部，采样数据区的一些字节
-            local samples = {}
-            for i = 100, math.min(#data - 3, 500), 10 do
-                local r = string.byte(data, i)
-                local g = string.byte(data, i + 1)
-                local b = string.byte(data, i + 2)
-                -- 过滤掉极端值
-                if r and g and b and (r+g+b) > 50 and (r+g+b) < 720 then
-                    table.insert(samples, {r=r, g=g, b=b})
-                end
-            end
-            
-            if #samples > 0 then
-                local tr, tg, tb = 0, 0, 0
-                for _, s in ipairs(samples) do
-                    tr = tr + s.r
-                    tg = tg + s.g
-                    tb = tb + s.b
-                end
-                color = {
-                    red = math.min(1, (tr / #samples / 255) * 1.4),
-                    green = math.min(1, (tg / #samples / 255) * 1.4),
-                    blue = math.min(1, (tb / #samples / 255) * 1.4),
-                    alpha = 0.9
-                }
-            end
-        end
-    end
-    
-    os.remove(tmpFile)
-    return color
-end
-
--- 根据应用名生成稳定颜色（备选方案）
+-- 根据应用名生成稳定颜色
 function EdgeDock.generateColorFromName(appName)
     local hash = 0
     for i = 1, #appName do
@@ -1041,9 +928,9 @@ end
 -- 检查点是否在槽位区域
 function EdgeDock.isPointInSlot(x, y, slotIndex)
     local sx, sy, sw, sh = EdgeDock.getSlotPosition(slotIndex)
-    -- 扩大检测区域方便拖拽（上下左右都扩展）
-    return x >= sx - 80 and x <= sx + sw + 80
-           and y >= sy - 10 and y <= sy + sh + 10
+    local r = EdgeDock.config.triggerRange
+    return x >= sx - r.leftExtend and x <= sx + sw + r.rightExtend
+           and y >= sy - r.topExtend and y <= sy + sh + r.bottomExtend
 end
 
 -- 检查点是否在窗口区域内（用于检测鼠标是否离开窗口）
@@ -2155,8 +2042,9 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
         
         local sx, sy, sw, sh = EdgeDock.getSlotPosition(i, screen)
         -- 扩大检测区域：屏幕右边缘附近都能触发
-        local inSlotArea = mousePos.x >= sx - 20 and mousePos.x <= rightEdge + 5
-                          and mousePos.y >= sy - 5 and mousePos.y <= sy + sh + 5
+        local r = EdgeDock.config.triggerRange
+        local inSlotArea = mousePos.x >= sx - r.leftExtend and mousePos.x <= rightEdge + r.rightExtend
+                          and mousePos.y >= sy - r.topExtend and mousePos.y <= sy + sh + r.bottomExtend
         
         -- 检测是否在槽位区域 - 显示窗口
         if inSlotArea and not slot.isShowing then
@@ -2166,9 +2054,10 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
         -- 检测是否离开窗口区域 - 启动隐藏计时器
         if slot.isShowing then
             local inWindow = EdgeDock.isPointInWindow(mousePos.x, mousePos.y, slot.win, slot)
-            -- 扩大槽位检测区域
-            local inSlot = mousePos.x >= sx - 30 and mousePos.x <= rightEdge + 10
-                          and mousePos.y >= sy - 10 and mousePos.y <= sy + sh + 10
+            -- 扩大槽位检测区域（使用配置参数）
+            local r = EdgeDock.config.triggerRange
+            local inSlot = mousePos.x >= sx - r.leftExtend - 10 and mousePos.x <= rightEdge + r.rightExtend + 5
+                          and mousePos.y >= sy - r.topExtend - 5 and mousePos.y <= sy + sh + r.bottomExtend + 5
             
             -- 检测窗口是否被居中（用户手动居中后需要暂停移出检测）
             if not slot.centeredPaused then
