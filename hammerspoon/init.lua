@@ -3072,16 +3072,18 @@ function EdgeDock.stop()
     end
 end
 
--- 快捷键：停靠到槽位 1-5 (Ctrl+Opt+数字)
-for i = 1, 5 do
+-- 快捷键：停靠到槽位 1-9 (Ctrl+Opt+数字)
+-- 根据 maxSlots 配置动态绑定，支持 1-9 槽位
+for i = 1, math.min(EdgeDock.config.maxSlots, 9) do
     hs.hotkey.bind(mash, tostring(i), function()
         local win = hs.window.focusedWindow()
         EdgeDock.dockWindow(win, i)
     end)
 end
 
--- 快捷键：恢复槽位 1-5 (Ctrl+Opt+Cmd+数字)
-for i = 1, 5 do
+-- 快捷键：恢复槽位 1-9 (Ctrl+Opt+Cmd+数字)
+-- 根据 maxSlots 配置动态绑定，支持 1-9 槽位
+for i = 1, math.min(EdgeDock.config.maxSlots, 9) do
     hs.hotkey.bind({"ctrl", "alt", "cmd"}, tostring(i), function()
         EdgeDock.undockWindow(i)
     end)
