@@ -707,14 +707,15 @@ local EdgeDock = {
     },
     currentBarScreen = nil,  -- 当前小条所在的屏幕（用于多显示器检测）
     config = {
-        maxSlots = 5,       -- 最大槽位数
-        barWidth = 4,       -- 小条宽度
+        maxSlots = 7,       -- 最大槽位数
+        barWidth = 3,       -- 小条宽度
         topMargin = 6,    -- 顶部边距（距离屏幕上边缘）
         bottomMargin = 6, -- 底部边距（距离屏幕下边缘）
         barGap = 10,        -- 小条之间的空隙
         peekWidth = 1,      -- 窗口 peek 出来的宽度
         hideDelay = 0,      -- 鼠标离开后多久收起（秒）
-        dragThreshold = 10, -- 拖拽检测阈值（像素）
+        dragThreshold = 6, -- 拖拽检测阈值（像素）
+        centeredPause = true,  -- 居中后暂停鼠标移出检测
         -- 深色/浅色模式颜色配置
         colors = {
             dark = {
@@ -1949,6 +1950,24 @@ function EdgeDock.tryReconnect(slot)
     return nil
 end
 
+-- 检查窗口是否处于居中状态
+function EdgeDock.isWindowCentered(win, screen)
+    if not win then return false end
+    local frame = win:frame()
+    if not frame then return false end
+    
+    -- 计算屏幕中心区域（允许一定误差）
+    local centerX = screen.x + (screen.w - frame.w) / 2
+    local centerY = screen.y + (screen.h - frame.h) / 2
+    local tolerance = 20  -- 误差容忍度（像素）
+    
+    -- 检查窗口是否在屏幕中心附近
+    local isCenteredX = math.abs(frame.x - centerX) < tolerance
+    local isCenteredY = math.abs(frame.y - centerY) < tolerance
+    
+    return isCenteredX and isCenteredY
+end
+
 -- 显示窗口（滑出到右边，保持大小，在槽位内垂直居中）
 function EdgeDock.peekWindow(slotIndex)
     local slot = EdgeDock.slots[slotIndex]
@@ -2022,6 +2041,10 @@ function EdgeDock.peekWindow(slotIndex)
         -- 缓存窗口 frame 供鼠标移动检测使用
         slot.lastWinFrame = {x = showX, y = slot.winY, w = winW, h = winH}
         
+        -- 重置居中暂停状态
+        slot.centeredPaused = false
+        slot.wasMouseInWindow = false
+        
         -- 将窗口置顶并激活（最前面）
         win:raise()
         win:focus()
@@ -2060,6 +2083,8 @@ function EdgeDock.hideWindow(slotIndex)
     end
     
     slot.isShowing = false
+    slot.centeredPaused = false
+    slot.wasMouseInWindow = false
 end
 
 -- 完全恢复窗口
@@ -2145,13 +2170,53 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
             local inSlot = mousePos.x >= sx - 30 and mousePos.x <= rightEdge + 10
                           and mousePos.y >= sy - 10 and mousePos.y <= sy + sh + 10
             
+            -- 检测窗口是否被居中（用户手动居中后需要暂停移出检测）
+            if not slot.centeredPaused then
+                local win = slot.win
+                if win then
+                    local currentFrame = win:frame()
+                    -- 如果窗口不在贴边位置（靠右），可能被居中了
+                    local showX = screen.x + screen.w - slot.originalFrame.w
+                    if math.abs(currentFrame.x - showX) > 100 then
+                        -- 窗口位置偏离贴边位置超过100像素，可能是被居中了
+                        -- 检查是否确实在屏幕中央附近
+                        if EdgeDock.isWindowCentered(win, screen) then
+                            slot.centeredPaused = true
+                            slot.wasMouseInWindow = false  -- 重置鼠标状态
+                            print(string.format("[EdgeDock] 槽位%d: 检测到窗口被居中，暂停移出检测", i))
+                        end
+                    end
+                end
+            end
+            
+            -- 检测鼠标是否进入窗口（从外部移到内部）
+            local wasInWindow = slot.wasMouseInWindow or false
+            if inWindow and not wasInWindow then
+                -- 鼠标进入窗口：如果之前是居中暂停状态，恢复正常检测
+                if slot.centeredPaused then
+                    slot.centeredPaused = false
+                    print(string.format("[EdgeDock] 槽位%d: 鼠标进入窗口，恢复移出检测", i))
+                end
+            end
+            slot.wasMouseInWindow = inWindow
+            
             -- 既不在窗口内，也不在槽位上
             if not inWindow and not inSlot then
-                if not slot.hideTimer then
-                    slot.hideTimer = hs.timer.doAfter(EdgeDock.config.hideDelay, function()
-                        EdgeDock.hideWindow(i)
+                -- 如果处于居中暂停状态，不隐藏窗口
+                if slot.centeredPaused then
+                    -- 居中暂停中，忽略移出检测
+                    if slot.hideTimer then
+                        slot.hideTimer:stop()
                         slot.hideTimer = nil
-                    end)
+                    end
+                else
+                    -- 正常检测：启动隐藏计时器
+                    if not slot.hideTimer then
+                        slot.hideTimer = hs.timer.doAfter(EdgeDock.config.hideDelay, function()
+                            EdgeDock.hideWindow(i)
+                            slot.hideTimer = nil
+                        end)
+                    end
                 end
             else
                 -- 还在窗口或槽位上，取消隐藏计时器
