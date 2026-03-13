@@ -24,7 +24,7 @@ local mashShift = {"ctrl", "alt", "shift"}  -- Ctrl + Option + Shift
 -- ============================================
 
 local margin = {
-    left = 40,       -- 左侧边距（距离屏幕左边缘）
+    left = 200,       -- 左侧边距（距离屏幕左边缘）
     right = 11,      -- 右侧边距（距离屏幕右边缘）
     inner = 40,      -- 中间边距（窗口之间的空隙）
 }
@@ -231,18 +231,19 @@ hs.hotkey.bind(mash, "return", function()
     setWinFrame(win, hs.geometry.rect(area.x, area.y, area.w, area.h))
 end)
 
--- 居中（手动计算，无动画）
+-- 居中（手动计算，无动画，考虑边距）
 hs.hotkey.bind(mash, "c", function()
     local win = hs.window.focusedWindow()
     if not win then return end
     saveWindowState(win)
     
     local max = getWinScreen(win)
+    local area = getUsableArea(max)
     local frame = win:frame()
     
-    -- 计算居中位置
-    local newX = max.x + (max.w - frame.w) / 2
-    local newY = max.y + (max.h - frame.h) / 2
+    -- 在可用区域内居中
+    local newX = area.x + (area.w - frame.w) / 2
+    local newY = area.y + (area.h - frame.h) / 2
     
     setWinFrame(win, hs.geometry.rect(newX, newY, frame.w, frame.h))
 end)
@@ -2372,12 +2373,15 @@ function EdgeDock.isWindowCentered(win, screen)
     local frame = win:frame()
     if not frame then return false end
     
-    -- 计算屏幕中心区域（允许一定误差）
-    local centerX = screen.x + (screen.w - frame.w) / 2
-    local centerY = screen.y + (screen.h - frame.h) / 2
+    -- 计算可用区域（考虑边距）
+    local area = getUsableArea(screen)
+    
+    -- 计算可用区域中心位置（允许一定误差）
+    local centerX = area.x + (area.w - frame.w) / 2
+    local centerY = area.y + (area.h - frame.h) / 2
     local tolerance = 20  -- 误差容忍度（像素）
     
-    -- 检查窗口是否在屏幕中心附近
+    -- 检查窗口是否在可用区域中心附近
     local isCenteredX = math.abs(frame.x - centerX) < tolerance
     local isCenteredY = math.abs(frame.y - centerY) < tolerance
     
