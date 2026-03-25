@@ -1880,7 +1880,8 @@ function EdgeDock.restoreState()
                 end
             end
             
-            if app then
+            -- 安全检查：确保 app 是有效的应用对象且有 allWindows 方法
+            if app and type(app.allWindows) == "function" then
                 -- 查找匹配的窗口
                 local targetWin = nil
                 local windows = app:allWindows()
@@ -1993,6 +1994,9 @@ function EdgeDock.restoreState()
                 else
                     print(prefix .. " [RESTORE_STATE]   槽位 " .. item.slotIndex .. " 恢复失败: 未找到匹配窗口 (" .. item.appName .. ")")
                 end
+            elseif app then
+                -- app 对象存在但不是有效的应用对象（例如可能是错误保存的 timer 对象）
+                print(prefix .. " [RESTORE_STATE]   槽位 " .. item.slotIndex .. " 恢复失败: 应用对象无效 (" .. item.appName .. ")，清理槽位")
             else
                 print(prefix .. " [RESTORE_STATE]   槽位 " .. item.slotIndex .. " 恢复失败: 应用未运行 (" .. item.appName .. ")")
             end
@@ -2078,8 +2082,13 @@ function EdgeDock.clearAllHighlights()
 end
 
 -- 将窗口停靠到槽位
-function EdgeDock.dockWindow(win, slotIndex)
+-- @param win 窗口对象
+-- @param slotIndex 槽位索引
+-- @param options 可选参数表 {autoPeek = boolean}，autoPeek=true 表示如果鼠标在窗口上则自动显示
+function EdgeDock.dockWindow(win, slotIndex, options)
     if not win or not win:isStandard() then return false end
+    
+    options = options or {}
     
     -- 如果窗口已经在其他槽位，先移除
     for i, slot in pairs(EdgeDock.slots) do
@@ -2116,13 +2125,24 @@ function EdgeDock.dockWindow(win, slotIndex)
     
     print(string.format("[EdgeDock] 槽位%d: y=%.0f, h=%.0f, 窗口高=%.0f, winY=%.0f", slotIndex, sy, sh, frame.h, winY))
     
+    -- 计算窗口显示位置（靠右）
+    local showX = screen.x + screen.w - frame.w
+    
+    -- 检查鼠标是否当前在窗口区域内（用于 autoPeek 模式）
+    local mousePos = hs.mouse.absolutePosition()
+    local isMouseInWindow = mousePos.x >= frame.x and mousePos.x <= frame.x + frame.w
+                            and mousePos.y >= frame.y and mousePos.y <= frame.y + frame.h
+    
+    -- 如果启用了 autoPeek 且鼠标在窗口上，则先显示窗口
+    local shouldShow = options.autoPeek and isMouseInWindow
+    
     EdgeDock.slots[slotIndex] = {
         win = win,
         winId = win:id(),
         winTitle = win:title() or "",  -- 保存窗口标题用于恢复时匹配
         originalFrame = frame,
         appName = app and app:name() or "?",
-        isShowing = false,
+        isShowing = shouldShow,
         hideTimer = nil,
         slotY = sy,         -- 槽位顶部 Y
         slotHeight = sh,    -- 槽位高度
@@ -2130,10 +2150,20 @@ function EdgeDock.dockWindow(win, slotIndex)
         screenId = win:screen():id(),  -- 记录窗口原本所在的屏幕
     }
     
-    -- 隐藏到当前屏幕右下角（只露出1x1像素，保持尺寸）
-    local hideX = screen.x + screen.w - 1
-    local hideY = screen.y + screen.h - 1
-    setWinFrame(win, hs.geometry.rect(hideX, hideY, frame.w, frame.h))
+    if shouldShow then
+        -- 鼠标在窗口上，显示窗口到右侧
+        setWinFrame(win, hs.geometry.rect(showX, winY, frame.w, frame.h))
+        -- 缓存窗口 frame 供鼠标检测使用
+        EdgeDock.slots[slotIndex].lastWinFrame = {x = showX, y = winY, w = frame.w, h = frame.h}
+        -- 将窗口置顶
+        win:raise()
+        print(string.format("[EdgeDock] 槽位%d: 鼠标在窗口内，自动显示窗口", slotIndex))
+    else
+        -- 隐藏到当前屏幕右下角（只露出1x1像素，保持尺寸）
+        local hideX = screen.x + screen.w - 1
+        local hideY = screen.y + screen.h - 1
+        setWinFrame(win, hs.geometry.rect(hideX, hideY, frame.w, frame.h))
+    end
     
     EdgeDock.refreshBars()
     EdgeDock.saveState()  -- 保存状态
@@ -3165,9 +3195,9 @@ EdgeDock.autoDockWatcher = hs.application.watcher.new(function(appName, eventTyp
             return
         end
         
-        -- 执行停靠
+        -- 执行停靠（使用 autoPeek 模式：如果鼠标在窗口上则自动显示）
         print("[AutoDock] 将 " .. appName .. " 停靠到槽位 " .. targetSlot)
-        EdgeDock.dockWindow(win, targetSlot)
+        EdgeDock.dockWindow(win, targetSlot, {autoPeek = true})
     end)
 end)
 
