@@ -3251,7 +3251,7 @@ function DisplayLayoutManager.getScreenCount()
 end
 
 -- 保存当前所有窗口的布局
-function DisplayLayoutManager.saveLayout()
+function DisplayLayoutManager.saveLayout(showNotify)
     if DisplayLayoutManager.isRestoring then return end
     
     local config = DisplayLayoutManager.getScreenConfig()
@@ -3289,6 +3289,11 @@ function DisplayLayoutManager.saveLayout()
     end
     
     print("[DisplayLayout] 布局已保存 (" .. #layout .. " 个窗口, 配置: " .. config .. ")")
+    
+    if showNotify then
+        notify("显示器布局", "已保存当前布局 (" .. #layout .. " 个窗口)")
+        hs.alert.show("显示器布局已保存\n" .. #layout .. " 个窗口", 1.5)
+    end
 end
 
 -- 从文件加载保存的布局
@@ -3417,6 +3422,7 @@ function DisplayLayoutManager.restoreLayout(targetConfig)
     
     if restoredCount > 0 then
         notify("显示器布局", string.format("已恢复 %d 个窗口", restoredCount))
+        hs.alert.show(string.format("显示器布局已恢复\n%d 个窗口", restoredCount), 1.5)
         print("[DisplayLayout] 恢复完成: " .. restoredCount .. "/" .. #layout .. " 个窗口")
     end
     
@@ -3512,14 +3518,13 @@ function DisplayLayoutManager.init()
     print("[DisplayLayout] 显示器布局管理器已初始化，当前 " .. DisplayLayoutManager.lastScreenCount .. " 个屏幕")
 end
 
--- 手动保存布局快捷键
-hs.hotkey.bind({"ctrl", "alt", "cmd"}, "d", function()
-    DisplayLayoutManager.saveLayout()
-    notify("显示器布局", "已保存当前布局")
+-- 手动保存布局快捷键 (⌃⌥ D)
+hs.hotkey.bind(mash, "d", function()
+    DisplayLayoutManager.saveLayout(true)
 end)
 
--- 手动恢复布局快捷键
-hs.hotkey.bind({"ctrl", "alt", "shift", "cmd"}, "d", function()
+-- 手动恢复布局快捷键 (⌃⌥⇧ D)
+hs.hotkey.bind(mashShift, "d", function()
     DisplayLayoutManager.restoreLayout()
 end)
 
