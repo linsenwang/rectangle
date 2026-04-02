@@ -3440,11 +3440,11 @@ function DisplayLayoutManager.onScreenChange()
     
     print(string.format("[DisplayLayout] 屏幕变化: %d -> %d 个屏幕", lastCount, currentCount))
     
-    -- 如果是从多屏变成单屏，保存布局
-    if lastCount > 1 and currentCount == 1 then
-        print("[DisplayLayout] 外接显示器断开，保存布局...")
-        DisplayLayoutManager.saveLayout()
-    end
+    -- 如果是从多屏变成单屏，保存布局（已禁用自动保存，使用手动 ⌃⌥D 保存）
+    -- if lastCount > 1 and currentCount == 1 then
+    --     print("[DisplayLayout] 外接显示器断开，保存布局...")
+    --     DisplayLayoutManager.saveLayout()
+    -- end
     
     -- 如果是从单屏变成多屏，尝试恢复布局
     if lastCount == 1 and currentCount > 1 then
@@ -3474,12 +3474,12 @@ function DisplayLayoutManager.onScreenChange()
         end)
     end
     
-    -- 如果是多屏之间的变化（比如换了不同的外接显示器），也保存一下
-    if lastCount > 1 and currentCount > 1 and lastCount == currentCount then
-        hs.timer.doAfter(2, function()
-            DisplayLayoutManager.saveLayout()
-        end)
-    end
+    -- 如果是多屏之间的变化（比如换了不同的外接显示器），也保存一下（已禁用自动保存）
+    -- if lastCount > 1 and currentCount > 1 and lastCount == currentCount then
+    --     hs.timer.doAfter(2, function()
+    --         DisplayLayoutManager.saveLayout()
+    --     end)
+    -- end
     
     DisplayLayoutManager.lastScreenCount = currentCount
 end
@@ -3502,8 +3502,8 @@ function DisplayLayoutManager.init()
     -- 系统休眠/唤醒监听（休眠时通常会断开外接显示器）
     DisplayLayoutManager.caffeinateWatcher = hs.caffeinate.watcher.new(function(eventType)
         if eventType == hs.caffeinate.watcher.systemWillSleep then
-            print("[DisplayLayout] 系统即将休眠，保存布局...")
-            DisplayLayoutManager.saveLayout()
+            print("[DisplayLayout] 系统即将休眠（自动保存已禁用，使用手动 ⌃⌥D 保存）")
+            -- DisplayLayoutManager.saveLayout()
         elseif eventType == hs.caffeinate.watcher.systemDidWake then
             print("[DisplayLayout] 系统唤醒，屏幕数量: " .. DisplayLayoutManager.getScreenCount())
             -- 唤醒后更新屏幕数量，避免误判
