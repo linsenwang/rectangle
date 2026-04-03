@@ -2423,6 +2423,11 @@ function EdgeDock.peekWindow(slotIndex)
     local slot = EdgeDock.slots[slotIndex]
     if not slot then return end
     
+    -- 如果窗口已经显示且处于居中暂停状态，不再重新定位（避免鼠标跨屏幕时打断居中状态）
+    if slot.isShowing and slot.centeredPaused then
+        return
+    end
+    
     -- 快速获取窗口对象（不做耗时的验证）
     local win = slot.win
     if not win and slot.winId then
@@ -2645,10 +2650,20 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
             -- 检测鼠标是否进入窗口（从外部移到内部）
             local wasInWindow = slot.wasMouseInWindow or false
             if inWindow and not wasInWindow then
-                -- 鼠标进入窗口：如果之前是居中暂停状态，恢复正常检测
+                -- 鼠标进入窗口：如果之前是居中暂停状态，且窗口是贴边显示（非居中），才恢复正常检测
+                -- 窗口被居中后，不应该因为鼠标进入而恢复检测，否则跨屏幕回来时又会缩回去
                 if slot.centeredPaused then
-                    slot.centeredPaused = false
-                    print(string.format("[EdgeDock] 槽位%d: 鼠标进入窗口，恢复移出检测", i))
+                    local win = slot.win
+                    if win then
+                        local currentFrame = win:frame()
+                        -- 检查窗口是否在贴边位置（靠右）
+                        local showX = screen.x + screen.w - slot.originalFrame.w
+                        -- 如果窗口在贴边位置（非居中），才恢复检测
+                        if math.abs(currentFrame.x - showX) <= 100 then
+                            slot.centeredPaused = false
+                            print(string.format("[EdgeDock] 槽位%d: 鼠标进入贴边窗口，恢复移出检测", i))
+                        end
+                    end
                 end
             end
             slot.wasMouseInWindow = inWindow
@@ -3260,21 +3275,24 @@ function DisplayLayoutManager.saveLayout(showNotify)
     
     for _, win in ipairs(windows) do
         if win:isStandard() then
-            local app = win:application()
-            local screen = win:screen()
-            if app and screen then
-                local frame = win:frame()
-                table.insert(layout, {
-                    app = app:name(),
-                    title = win:title(),
-                    winId = win:id(),
-                    screenId = screen:id(),
-                    screenName = screen:name(),
-                    x = frame.x,
-                    y = frame.y,
-                    w = frame.w,
-                    h = frame.h,
-                })
+            -- 忽略 Edge Dock 中的窗口
+            if not TileManager.isWindowInEdgeDock(win) then
+                local app = win:application()
+                local screen = win:screen()
+                if app and screen then
+                    local frame = win:frame()
+                    table.insert(layout, {
+                        app = app:name(),
+                        title = win:title(),
+                        winId = win:id(),
+                        screenId = screen:id(),
+                        screenName = screen:name(),
+                        x = frame.x,
+                        y = frame.y,
+                        w = frame.w,
+                        h = frame.h,
+                    })
+                end
             end
         end
     end
@@ -3518,13 +3536,13 @@ function DisplayLayoutManager.init()
     print("[DisplayLayout] 显示器布局管理器已初始化，当前 " .. DisplayLayoutManager.lastScreenCount .. " 个屏幕")
 end
 
--- 手动保存布局快捷键 (⌃⌥ D)
-hs.hotkey.bind(mash, "d", function()
+-- 手动保存布局快捷键 (⌃⌥⇧ D)
+hs.hotkey.bind(mashShift, "d", function()
     DisplayLayoutManager.saveLayout(true)
 end)
 
--- 手动恢复布局快捷键 (⌃⌥⇧ D)
-hs.hotkey.bind(mashShift, "d", function()
+-- 手动恢复布局快捷键 (⌃⌥ D)
+hs.hotkey.bind(mash, "d", function()
     DisplayLayoutManager.restoreLayout()
 end)
 
