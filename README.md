@@ -125,6 +125,7 @@ TileManager.config.spacing = 0  -- 默认无间距
 |--------|------|
 | `⌃⌥ D` | 手动保存当前显示器布局 |
 | `⌃⌥⇧ D` | 手动恢复上次保存的布局 |
+| `⌃⌥⌘ I` | 查看屏幕信息（用于配置边距） |
 
 ### 窗口移动（微调）
 
@@ -181,7 +182,9 @@ TileManager.config.spacing = 0  -- 默认无间距
 
 ## 边距配置
 
-窗口布局会自动留出边距，可以在 `init.lua` 中调整：
+窗口布局会自动留出边距，支持**全局默认**、**应用特定**、**显示器特定**以及**应用+显示器组合**四种层级的配置。
+
+### 全局默认边距
 
 ```lua
 local margin = {
@@ -190,6 +193,63 @@ local margin = {
     inner = 30,  -- 中间边距（窗口之间的空隙）
 }
 ```
+
+### 应用特定边距
+
+为特定应用设置不同的边距（如 Chrome 有侧栏需要更大的左边距）：
+
+```lua
+local appMargins = {
+    ["Google Chrome"] = { left = 80, right = 11, inner = 40 },
+    ["Safari"] = { left = 20, right = 11, inner = 40 },
+    ["Code"] = { left = 60, right = 11, inner = 40 },
+}
+```
+
+应用名支持大小写不敏感匹配。
+
+### 显示器特定边距
+
+为不同显示器设置边距（如外接大屏使用更大的边距）：
+
+```lua
+local displayMargins = {
+    -- 通过屏幕名称匹配
+    ["Built-in Retina Display"] = { left = 11, right = 11, inner = 40 },
+    ["DELL U2723QE"] = { left = 20, right = 20, inner = 50 },
+    
+    -- 通过屏幕ID匹配（格式：screen_ + ID）
+    ["screen_69731840"] = { left = 15, right = 15, inner = 45 },
+}
+```
+
+**获取屏幕信息**：按 `⌃⌥⌘ I` 查看当前所有屏幕的名称和ID。
+
+### 应用+显示器组合配置（最高优先级）
+
+针对特定应用在特定显示器上的边距：
+
+```lua
+local appDisplayMargins = {
+    ["Google Chrome"] = {
+        ["Built-in Retina Display"] = { left = 60, right = 11, inner = 40 },
+        ["DELL U2723QE"] = { left = 100, right = 20, inner = 50 },
+        ["screen_69731840"] = { left = 80, right = 11, inner = 40 },
+    },
+    ["Safari"] = {
+        ["DELL U2723QE"] = { left = 30, right = 20, inner = 50 },
+    },
+}
+```
+
+### 优先级
+
+边距配置的优先级（从高到低）：
+
+1. **应用+显示器组合配置** (`appDisplayMargins`)
+2. **应用特定配置** (`appMargins`)
+3. **显示器特定配置** (`displayMargins`)
+4. **全局默认配置** (`margin`)
 
 ## Edge Dock 配置
 

@@ -23,18 +23,130 @@ local mashShift = {"ctrl", "alt", "shift"}  -- Ctrl + Option + Shift
 -- 边距配置
 -- ============================================
 
+-- 默认边距
 local margin = {
-    left = 11,       -- 左侧边距（距离屏幕左边缘）
+    left = 220,       -- 左侧边距（距离屏幕左边缘）
     right = 11,      -- 右侧边距（距离屏幕右边缘）
     inner = 40,      -- 中间边距（窗口之间的空隙）
 }
 
+-- 应用特定边距配置（可选）
+-- 应用名（不区分大小写） -> 边距配置
+local appMargins = {
+    -- 示例：Chrome 有侧栏，左边距更大
+    ["Google Chrome"] = { left = 11, right = 11, inner = 40 },
+    ["Chrome"] = { left = 11, right = 11, inner = 40 },
+    -- 你可以在这里添加更多应用特定配置
+    -- ["Safari"] = { left = 20, right = 11, inner = 40 },
+    -- ["Code"] = { left = 60, right = 11, inner = 40 },
+}
+
+-- 显示器特定边距配置（可选）
+-- 支持通过屏幕名称或屏幕ID匹配
+local displayMargins = {
+    -- 示例：内置显示器（Retina 屏幕）
+    ["Built-in Retina Display"] = { left = 11, right = 11, inner = 40 },
+    
+    -- 示例：特定外接显示器（通过名称匹配）
+    -- ["DELL U2723QE"] = { left = 20, right = 20, inner = 50 },
+    -- ["LG ULTRAWIDE"] = { left = 30, right = 30, inner = 60 },
+    
+    -- 示例：通过屏幕ID匹配（使用 hs.screen:id() 获取）
+    -- ["screen_69731840"] = { left = 15, right = 15, inner = 45 },
+}
+
+-- 应用+显示器组合配置（优先级最高）
+-- 格式：["应用名"] = { ["显示器名"] = {边距配置} }
+local appDisplayMargins = {
+    -- 示例：Chrome 在外接显示器上使用更大的边距
+    -- ["Google Chrome"] = {
+    --     ["DELL U2723QE"] = { left = 100, right = 20, inner = 50 },
+    -- },
+}
+
+-- 获取屏幕标识（名称或ID）
+function getScreenIdentifier(screen)
+    if not screen then return nil end
+    return screen:name() or ("screen_" .. screen:id())
+end
+
+-- 获取边距配置（综合考虑应用和显示器）
+function getAppMargin(win)
+    if not win then return margin end
+    
+    local app = win:application()
+    local appName = app and app:name() or nil
+    local screen = win:screen()
+    local screenId = getScreenIdentifier(screen)
+    
+    -- 1. 优先检查应用+显示器组合配置
+    if appName and screenId and appDisplayMargins[appName] then
+        local displayConfig = appDisplayMargins[appName]
+        -- 尝试精确匹配屏幕名称
+        if displayConfig[screenId] then
+            return displayConfig[screenId]
+        end
+        -- 尝试通过屏幕ID匹配
+        if screen then
+            local idKey = "screen_" .. screen:id()
+            if displayConfig[idKey] then
+                return displayConfig[idKey]
+            end
+        end
+        -- 尝试大小写不敏感匹配
+        for name, config in pairs(displayConfig) do
+            if string.lower(name) == string.lower(screenId) then
+                return config
+            end
+        end
+    end
+    
+    -- 2. 检查应用特定配置
+    if appName then
+        if appMargins[appName] then
+            return appMargins[appName]
+        end
+        -- 尝试大小写不敏感匹配
+        for name, config in pairs(appMargins) do
+            if string.lower(name) == string.lower(appName) then
+                return config
+            end
+        end
+    end
+    
+    -- 3. 检查显示器特定配置
+    if screenId then
+        if displayMargins[screenId] then
+            return displayMargins[screenId]
+        end
+        -- 尝试通过屏幕ID匹配
+        if screen then
+            local idKey = "screen_" .. screen:id()
+            if displayMargins[idKey] then
+                return displayMargins[idKey]
+            end
+        end
+        -- 尝试大小写不敏感匹配
+        for name, config in pairs(displayMargins) do
+            if string.lower(name) == string.lower(screenId) then
+                return config
+            end
+        end
+    end
+    
+    -- 4. 返回默认配置
+    return margin
+end
+
 -- 计算屏幕可用区域（扣除边距后的区域）
-function getUsableArea(max)
+-- @param max 屏幕 frame
+-- @param win 可选，窗口对象，用于获取应用特定边距
+function getUsableArea(max, win)
+    local m = win and getAppMargin(win) or margin
     return {
-        x = max.x + margin.left,
+        x = max.x + m.left,
         y = max.y,
-        w = max.w - margin.left - margin.right,
+        w = max.w - m.left - m.right,
         h = max.h
     }
 end
@@ -115,8 +227,9 @@ hs.hotkey.bind(mash, "left", function()
     
     local id = win:id()
     local max = getWinScreen(win)
-    local area = getUsableArea(max)
+    local area = getUsableArea(max, win)
     local frame = win:frame()
+    local m = getAppMargin(win)
     
     -- 计算左侧半屏的参考区域（用于检测当前位置）
     local leftHalfWidth = max.w * 0.5
@@ -135,15 +248,15 @@ hs.hotkey.bind(mash, "left", function()
         cycleState[id] = state
         local widths = {0.5, 2/3, 5/6}
         -- 计算可用宽度：屏幕宽 - 左距 - 中间距 - 右距
-        local usableW = max.w - margin.left - margin.inner - margin.right
+        local usableW = max.w - m.left - m.inner - m.right
         local width = usableW * widths[state]
-        setWinFrame(win, hs.geometry.rect(max.x + margin.left, area.y, width, area.h))
+        setWinFrame(win, hs.geometry.rect(max.x + m.left, area.y, width, area.h))
     else
         -- 不在左半屏，先设为 1/2，重置循环
         cycleState[id] = 1
-        local usableW = max.w - margin.left - margin.inner - margin.right
+        local usableW = max.w - m.left - m.inner - m.right
         local width = usableW * 0.5
-        setWinFrame(win, hs.geometry.rect(max.x + margin.left, area.y, width, area.h))
+        setWinFrame(win, hs.geometry.rect(max.x + m.left, area.y, width, area.h))
     end
 end)
 
@@ -155,12 +268,13 @@ hs.hotkey.bind(mash, "right", function()
     
     local id = win:id()
     local max = getWinScreen(win)
-    local area = getUsableArea(max)
+    local area = getUsableArea(max, win)
     local frame = win:frame()
+    local m = getAppMargin(win)
     
     -- 计算可用宽度
-    local usableW = max.w - margin.left - margin.inner - margin.right
-    local rightEdge = max.x + max.w - margin.right
+    local usableW = max.w - m.left - m.inner - m.right
+    local rightEdge = max.x + max.w - m.right
     -- 右半屏三个档位的 x 坐标位置
     local rightXPositions = {
         rightEdge - usableW * 0.5,   -- 第一档
@@ -184,18 +298,18 @@ hs.hotkey.bind(mash, "right", function()
         cycleState[id] = state
         local widths = {0.5, 2/3, 5/6}
         -- 计算可用宽度：屏幕宽 - 左距 - 中间距 - 右距
-        local usableW = max.w - margin.left - margin.inner - margin.right
+        local usableW = max.w - m.left - m.inner - m.right
         local width = usableW * widths[state]
-        -- 右边缘对齐：从屏幕右边缘减去 margin.right 往左延伸
-        local rightEdge = max.x + max.w - margin.right
+        -- 右边缘对齐：从屏幕右边缘减去 m.right 往左延伸
+        local rightEdge = max.x + max.w - m.right
         local x = rightEdge - width
         setWinFrame(win, hs.geometry.rect(x, area.y, width, area.h))
     else
         -- 不在右半屏，先设为右 1/2，与左窗口对称
         cycleState[id] = 1
-        local usableW = max.w - margin.left - margin.inner - margin.right
+        local usableW = max.w - m.left - m.inner - m.right
         local width = usableW * 0.5
-        local rightEdge = max.x + max.w - margin.right
+        local rightEdge = max.x + max.w - m.right
         local x = rightEdge - width
         setWinFrame(win, hs.geometry.rect(x, area.y, width, area.h))
     end
@@ -207,7 +321,7 @@ hs.hotkey.bind(mash, "up", function()
     if not win then return end
     saveWindowState(win)
     local max = getWinScreen(win)
-    local area = getUsableArea(max)
+    local area = getUsableArea(max, win)
     setWinFrame(win, hs.geometry.rect(area.x, area.y, area.w, max.h * 0.5))
 end)
 
@@ -227,7 +341,7 @@ hs.hotkey.bind(mash, "return", function()
     if not win then return end
     saveWindowState(win)
     local max = getWinScreen(win)
-    local area = getUsableArea(max)
+    local area = getUsableArea(max, win)
     setWinFrame(win, hs.geometry.rect(area.x, area.y, area.w, area.h))
 end)
 
@@ -238,7 +352,7 @@ hs.hotkey.bind(mash, "c", function()
     saveWindowState(win)
     
     local max = getWinScreen(win)
-    local area = getUsableArea(max)
+    local area = getUsableArea(max, win)
     local frame = win:frame()
     
     -- 在可用区域内居中
@@ -260,9 +374,10 @@ hs.hotkey.bind(mash, "l", function()
     saveWindowState(win)
     local max = getWinScreen(win)
     local gap = 10  -- 几乎最大化的额外边距
+    local m = getAppMargin(win)
     setWinFrame(win, hs.geometry.rect(
-        max.x + margin.left + gap, max.y + gap,
-        max.w - margin.left - margin.right - gap * 2, max.h - gap * 2
+        max.x + m.left + gap, max.y + gap,
+        max.w - m.left - m.right - gap * 2, max.h - gap * 2
     ))
 end)
 
@@ -286,8 +401,9 @@ hs.hotkey.bind(mash, "u", function()
     if not win then return end
     saveWindowState(win)
     local max = getWinScreen(win)
-    local area = getUsableArea(max)
-    local w = (area.w - margin.inner) / 2
+    local area = getUsableArea(max, win)
+    local m = getAppMargin(win)
+    local w = (area.w - m.inner) / 2
     local h = max.h / 2
     setWinFrame(win, hs.geometry.rect(area.x, area.y, w, h))
 end)
@@ -298,10 +414,11 @@ hs.hotkey.bind(mash, "i", function()
     if not win then return end
     saveWindowState(win)
     local max = getWinScreen(win)
-    local area = getUsableArea(max)
-    local w = (area.w - margin.inner) / 2
+    local area = getUsableArea(max, win)
+    local m = getAppMargin(win)
+    local w = (area.w - m.inner) / 2
     local h = max.h / 2
-    local x = area.x + (area.w + margin.inner) / 2
+    local x = area.x + (area.w + m.inner) / 2
     setWinFrame(win, hs.geometry.rect(x, area.y, w, h))
 end)
 
@@ -311,8 +428,9 @@ hs.hotkey.bind(mash, "0", function()
     if not win then return end
     saveWindowState(win)
     local max = getWinScreen(win)
-    local area = getUsableArea(max)
-    local w = (area.w - margin.inner) / 2
+    local area = getUsableArea(max, win)
+    local m = getAppMargin(win)
+    local w = (area.w - m.inner) / 2
     local h = max.h / 2
     local y = area.y + max.h / 2
     setWinFrame(win, hs.geometry.rect(area.x, y, w, h))
@@ -324,10 +442,11 @@ hs.hotkey.bind(mash, "2", function()
     if not win then return end
     saveWindowState(win)
     local max = getWinScreen(win)
-    local area = getUsableArea(max)
-    local w = (area.w - margin.inner) / 2
+    local area = getUsableArea(max, win)
+    local m = getAppMargin(win)
+    local w = (area.w - m.inner) / 2
     local h = max.h / 2
-    local x = area.x + (area.w + margin.inner) / 2
+    local x = area.x + (area.w + m.inner) / 2
     local y = area.y + max.h / 2
     setWinFrame(win, hs.geometry.rect(x, y, w, h))
 end)
@@ -343,11 +462,12 @@ hs.hotkey.bind(mash, ",", function()
     
     local id = win:id()
     local max = getWinScreen(win)
-    local area = getUsableArea(max)
+    local area = getUsableArea(max, win)
     local frame = win:frame()
+    local m = getAppMargin(win)
     
     -- 计算三分之一屏的宽度（扣除中间边距后）
-    local thirdW = (area.w - margin.inner * 2) / 3
+    local thirdW = (area.w - m.inner * 2) / 3
     
     -- 检查是否在左侧（x ≈ 屏幕左边缘）且宽度 ≈ 1/3
     local isLeftSide = approx(frame.x, area.x, 10)
@@ -363,8 +483,8 @@ hs.hotkey.bind(mash, ",", function()
         -- 计算三个位置的x坐标（含中间边距）
         local xPositions = {
             area.x,
-            area.x + thirdW + margin.inner,
-            area.x + (thirdW + margin.inner) * 2
+            area.x + thirdW + m.inner,
+            area.x + (thirdW + m.inner) * 2
         }
         local x = xPositions[state]
         setWinFrame(win, hs.geometry.rect(x, area.y, thirdW, area.h))
@@ -383,11 +503,12 @@ hs.hotkey.bind(mash, ".", function()
     
     local id = win:id()
     local max = getWinScreen(win)
-    local area = getUsableArea(max)
+    local area = getUsableArea(max, win)
     local frame = win:frame()
+    local m = getAppMargin(win)
     
     -- 计算三分之一屏的宽度（扣除中间边距后）
-    local thirdW = (area.w - margin.inner * 2) / 3
+    local thirdW = (area.w - m.inner * 2) / 3
     
     -- 检查是否在右侧（x + w ≈ 屏幕右边缘）且宽度 ≈ 1/3
     local rightEdge = area.x + area.w
@@ -404,15 +525,15 @@ hs.hotkey.bind(mash, ".", function()
         -- 计算三个位置的x坐标（含中间边距）
         local xPositions = {
             area.x,
-            area.x + thirdW + margin.inner,
-            area.x + (thirdW + margin.inner) * 2
+            area.x + thirdW + m.inner,
+            area.x + (thirdW + m.inner) * 2
         }
         local x = xPositions[state]
         setWinFrame(win, hs.geometry.rect(x, area.y, thirdW, area.h))
     else
         -- 不在右侧 1/3，设为右 1/3，设置状态为右(3)
         thirdCycleState[id] = 3
-        local x = area.x + (thirdW + margin.inner) * 2
+        local x = area.x + (thirdW + m.inner) * 2
         setWinFrame(win, hs.geometry.rect(x, area.y, thirdW, area.h))
     end
 end)
@@ -2404,7 +2525,7 @@ function EdgeDock.isWindowCentered(win, screen)
     if not frame then return false end
     
     -- 计算可用区域（考虑边距）
-    local area = getUsableArea(screen)
+    local area = getUsableArea(screen, win)
     
     -- 计算可用区域中心位置（允许一定误差）
     local centerX = area.x + (area.w - frame.w) / 2
@@ -2852,22 +2973,23 @@ end, "AppleInterfaceThemeChangedNotification")
 local function isFullHeightWindow(win)
     local max = win:screen():frame()
     local frame = win:frame()
+    local m = getAppMargin(win)
     
     -- 检测是否是左/右半屏（宽度约为 0.5、2/3、5/6，位置在左/右边缘）
-    local isLeftSide = approx(frame.x, max.x, 10) or approx(frame.x, max.x + margin.left, 15)
+    local isLeftSide = approx(frame.x, max.x, 10) or approx(frame.x, max.x + m.left, 15)
     local isRightSide = approx(frame.x + frame.w, max.x + max.w, 10) or 
-                        approx(frame.x + frame.w, max.x + max.w - margin.right, 15)
+                        approx(frame.x + frame.w, max.x + max.w - m.right, 15)
     local isHalfWidth = approx(frame.w, max.w * 0.5, 40) or 
                         approx(frame.w, max.w * 2/3, 40) or
                         approx(frame.w, max.w * 5/6, 40)
     
     -- 检测是否是 1/3 分屏
-    local thirdW = (max.w - margin.left - margin.right - margin.inner * 2) / 3
+    local thirdW = (max.w - m.left - m.right - m.inner * 2) / 3
     local isThirdWidth = approx(frame.w, thirdW, 30)
     local isThirdLayout = isThirdWidth and (
-        approx(frame.x, max.x + margin.left, 15) or
-        approx(frame.x, max.x + margin.left + thirdW + margin.inner, 15) or
-        approx(frame.x, max.x + margin.left + (thirdW + margin.inner) * 2, 15)
+        approx(frame.x, max.x + m.left, 15) or
+        approx(frame.x, max.x + m.left + thirdW + m.inner, 15) or
+        approx(frame.x, max.x + m.left + (thirdW + m.inner) * 2, 15)
     )
     
     -- 如果高度已经约等于屏幕高度，也算（已经是全高了）
@@ -3574,3 +3696,40 @@ print("[RectangleHammerspoon] 配置已加载")
 
 -- 备用方法：如果 Shottr 支持 URL Scheme 或 CLI
 -- 可以通过 osascript 或 shell 命令触发
+
+-- ============================================
+-- 屏幕信息查看（用于配置显示器边距）
+-- ============================================
+
+-- 显示当前所有屏幕的信息（Ctrl+Opt+Cmd+I）
+hs.hotkey.bind({"ctrl", "alt", "cmd"}, "i", function()
+    local screens = hs.screen.allScreens()
+    local info = {}
+    
+    for i, screen in ipairs(screens) do
+        local frame = screen:frame()
+        local name = screen:name() or "Unknown"
+        local id = screen:id()
+        local idKey = "screen_" .. id
+        
+        table.insert(info, string.format("屏幕 %d: %s\nID: %d (%s)\n分辨率: %.0f x %.0f", 
+            i, name, id, idKey, frame.w, frame.h))
+    end
+    
+    local win = hs.window.focusedWindow()
+    if win then
+        local screen = win:screen()
+        local app = win:application()
+        local appName = app and app:name() or "Unknown"
+        local m = getAppMargin(win)
+        
+        table.insert(info, "\n--- 当前窗口 ---")
+        table.insert(info, string.format("应用: %s", appName))
+        table.insert(info, string.format("屏幕: %s (ID: %d)", screen:name() or "Unknown", screen:id()))
+        table.insert(info, string.format("当前边距: left=%d, right=%d, inner=%d", m.left, m.right, m.inner))
+    end
+    
+    local msg = table.concat(info, "\n\n")
+    hs.alert.show(msg, 4)
+    print("[ScreenInfo]\n" .. msg)
+end)
