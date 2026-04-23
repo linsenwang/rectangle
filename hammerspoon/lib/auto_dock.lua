@@ -1,14 +1,8 @@
 -- ============================================
--- 自动停靠：Apple Music 打开时自动停靠到槽位 4
+-- 自动停靠：应用打开时自动停靠到指定槽位
 -- ============================================
 
--- 自动停靠配置
-local AutoDockConfig = {
-    ["Music"] = 4,  -- Apple Music 停靠到槽位 4
-    -- 可以在这里添加更多应用的自动停靠配置
-    -- ["WeChat"] = 1,
-    -- ["Safari"] = 2,
-}
+-- 使用 config.lua 中的自动停靠配置
 
 -- 应用启动监听器（自动停靠）
 EdgeDock.autoDockWatcher = hs.application.watcher.new(function(appName, eventType, appObj)

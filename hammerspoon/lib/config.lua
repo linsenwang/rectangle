@@ -1,5 +1,6 @@
 -- ============================================
--- 全局配置与工具函数
+-- 全局配置中心
+-- 所有用户可配置项都集中在这里
 -- ============================================
 
 -- 禁用窗口动画
@@ -11,7 +12,10 @@ CONFIG_PATH = os.getenv("HOME") .. "/.hammerspoon/"
 -- Edge Dock 状态文件路径
 EDGEDOCK_STATE_FILE = CONFIG_PATH .. "edge_dock_state.json"
 
--- 修饰键定义
+-- ============================================
+-- 修饰键配置
+-- ============================================
+
 mash = {"ctrl", "alt"}           -- 主修饰键：Ctrl + Option
 mashShift = {"ctrl", "alt", "shift"}  -- Ctrl + Option + Shift
 
@@ -19,9 +23,9 @@ mashShift = {"ctrl", "alt", "shift"}  -- Ctrl + Option + Shift
 -- 边距配置
 -- ============================================
 
--- 默认边距
+-- 默认边距（所有应用和显示器的默认值）
 margin = {
-    left = 220,       -- 左侧边距（距离屏幕左边缘）
+    left = 120,      -- 左侧边距（距离屏幕左边缘）
     right = 11,      -- 右侧边距（距离屏幕右边缘）
     inner = 40,      -- 中间边距（窗口之间的空隙）
 }
@@ -31,8 +35,7 @@ margin = {
 appMargins = {
     -- 示例：Chrome 有侧栏，左边距更大
     ["Google Chrome"] = { left = 11, right = 11, inner = 40 },
-    ["Chrome"] = { left = 11, right = 11, inner = 40 },
-    -- 你可以在这里添加更多应用特定配置
+    -- ["Chrome"] = { left = 80, right = 11, inner = 40 },
     -- ["Safari"] = { left = 20, right = 11, inner = 40 },
     -- ["Code"] = { left = 60, right = 11, inner = 40 },
 }
@@ -41,13 +44,13 @@ appMargins = {
 -- 支持通过屏幕名称或屏幕ID匹配
 displayMargins = {
     -- 示例：内置显示器（Retina 屏幕）
-    ["Built-in Retina Display"] = { left = 80, right = 11, inner = 40 },
+    -- ["Built-in Retina Display"] = { left = 11, right = 11, inner = 40 },
     
     -- 示例：特定外接显示器（通过名称匹配）
     -- ["DELL U2723QE"] = { left = 20, right = 20, inner = 50 },
     -- ["LG ULTRAWIDE"] = { left = 30, right = 30, inner = 60 },
     
-    -- 示例：通过屏幕ID匹配（使用 hs.screen:id() 获取）
+    -- 示例：通过屏幕ID匹配（使用 screen_ID 格式）
     -- ["screen_69731840"] = { left = 15, right = 15, inner = 45 },
 }
 
@@ -57,8 +60,143 @@ appDisplayMargins = {
     -- 示例：Chrome 在外接显示器上使用更大的边距
     -- ["Google Chrome"] = {
     --     ["DELL U2723QE"] = { left = 100, right = 20, inner = 50 },
+    --     ["screen_69731840"] = { left = 80, right = 11, inner = 40 },
     -- },
 }
+
+-- ============================================
+-- Edge Dock 配置
+-- ============================================
+
+EdgeDockConfig = {
+    maxSlots = 7,       -- 最大槽位数（1-9）
+    barWidth = 3,       -- 小条宽度（像素）
+    topMargin = 6,      -- 顶部边距（距离屏幕上边缘）
+    bottomMargin = 6,   -- 底部边距（距离屏幕下边缘）
+    barGap = 10,        -- 小条之间的空隙（像素）
+    peekWidth = 1,      -- 窗口 peek 出来的宽度（像素）
+    hideDelay = 0,      -- 鼠标离开后多久收起（秒），0表示立即收起
+    centeredPause = true,  -- 居中后暂停鼠标移出检测
+    
+    -- 鼠标触发范围配置（像素）
+    triggerRange = {
+        leftExtend = 7,   -- 槽位左侧向左扩展的触发范围
+        rightExtend = 5,  -- 屏幕右边缘向右扩展的触发范围
+        topExtend = 5,    -- 槽位顶部向上扩展的触发范围
+        bottomExtend = 5, -- 槽位底部向下扩展的触发范围
+    },
+    
+    -- 深色/浅色模式颜色配置
+    colors = {
+        dark = {
+            emptyBar = {alpha = 0.3, red = 0.3, green = 0.3, blue = 0.3},      -- 空槽位颜色
+            emptyText = {alpha = 0, red = 1, green = 1, blue = 1},              -- 空槽位文字颜色
+            highlightOccupied = {alpha = 0.9, red = 0.3, green = 0.7, blue = 1.0},  -- 高亮-有窗口
+            highlightEmpty = {alpha = 0.6, red = 0.5, green = 0.5, blue = 0.5},     -- 高亮-空槽位
+            highlightText = {alpha = 1, red = 1, green = 1, blue = 1},          -- 高亮文字颜色
+            normalOccupiedText = {alpha = 1, red = 0, green = 0, blue = 0},     -- 正常-有窗口文字
+            mask = {alpha = 1, red = 0, green = 0, blue = 0},                   -- 遮罩条颜色
+        },
+        light = {
+            emptyBar = {alpha = 0.2, red = 0.7, green = 0.7, blue = 0.7},      -- 空槽位颜色（浅灰）
+            emptyText = {alpha = 0, red = 0.3, green = 0.3, blue = 0.3},        -- 空槽位文字颜色（深灰）
+            highlightOccupied = {alpha = 0.9, red = 0.2, green = 0.5, blue = 0.9},  -- 高亮-有窗口（深蓝）
+            highlightEmpty = {alpha = 0.5, red = 0.6, green = 0.6, blue = 0.6},     -- 高亮-空槽位
+            highlightText = {alpha = 1, red = 1, green = 1, blue = 1},          -- 高亮文字颜色
+            normalOccupiedText = {alpha = 1, red = 1, green = 1, blue = 1},     -- 正常-有窗口文字（浅色模式用白色）
+            mask = {alpha = 1, red = 0, green = 0, blue = 0},                   -- 遮罩条颜色
+        }
+    },
+    
+    -- 已知应用颜色表（支持深色/浅色模式）
+    -- 如果不指定某个模式，则回退到另一个模式
+    knownAppColors = {
+        ["WeChat"] = {
+            dark  = {red = 0.40, green = 0.65, blue = 0.45},
+            light = {red = 0.15, green = 0.35, blue = 0.20},
+        },
+        ["ChatGPT"] = {
+            dark  = {red = 0.65, green = 0.65, blue = 0.65},
+            light = {red = 0.18, green = 0.18, blue = 0.18},
+        },
+        ["Music"] = {
+            dark  = {red = 1.00, green = 0.30, blue = 0.38},
+            light = {red = 0.45, green = 0.18, blue = 0.25},
+        },
+        ["Kimi"] = {
+            dark  = {red = 0.55, green = 0.60, blue = 0.80},
+            light = {red = 0.28, green = 0.38, blue = 0.60},
+        },
+        ["Safari"] = {
+            dark  = {red = 0.25, green = 0.65, blue = 1.00},
+            light = {red = 0.05, green = 0.38, blue = 0.80},
+        },
+        ["Chrome"] = {
+            dark  = {red = 1.00, green = 0.40, blue = 0.20},
+            light = {red = 0.65, green = 0.18, blue = 0.05},
+        },
+        ["Code"] = {
+            dark  = {red = 0.25, green = 0.55, blue = 0.95},
+            light = {red = 0.05, green = 0.30, blue = 0.60},
+        },
+        ["Terminal"] = {
+            dark  = {red = 0.70, green = 0.70, blue = 0.70},
+            light = {red = 0.12, green = 0.12, blue = 0.12},
+        },
+    }
+}
+
+-- ============================================
+-- 窗口平铺配置
+-- ============================================
+
+TilingConfig = {
+    spacing = 0,        -- 默认间距（可以是负数，表示重叠）
+    mode = "single",    -- 默认模式: "single" | "multi" | "perScreen"
+                        -- "single" - 只在主显示器平铺所有窗口
+                        -- "multi"  - 将窗口均匀分配到所有显示器
+                        -- "perScreen" - 每个显示器平铺自己的窗口
+}
+
+-- ============================================
+-- 自动停靠配置
+-- ============================================
+
+AutoDockConfig = {
+    -- 应用名 = 槽位编号 (1-9)
+    -- ["Music"] = 4,  -- Apple Music 停靠到槽位 4
+    -- ["WeChat"] = 1, -- 微信停靠到槽位 1
+    -- ["Safari"] = 2, -- Safari 停靠到槽位 2
+}
+
+-- ============================================
+-- 显示器布局记忆配置
+-- ============================================
+
+DisplayLayoutConfig = {
+    -- 状态文件路径（相对于 CONFIG_PATH）
+    stateFile = "display_layouts.json",
+    
+    -- 是否启用自动保存（当显示器断开时）
+    -- 注意：当前版本默认禁用，使用手动保存 (⌃⌥⇧ D)
+    autoSaveOnDisconnect = false,
+    
+    -- 是否启用自动恢复（当显示器连接时）
+    autoRestoreOnConnect = true,
+    
+    -- 恢复延迟（秒）- 等待显示器完全初始化
+    restoreDelay = 1.5,
+}
+
+-- ============================================
+-- 配置加载完成
+-- ============================================
+
+print("[Config] 配置已加载")
+
+-- ============================================
+-- 工具函数（配置相关）
+-- ============================================
 
 -- 获取屏幕标识（名称或ID）
 function getScreenIdentifier(screen)
@@ -148,7 +286,7 @@ function getUsableArea(max, win)
 end
 
 -- ============================================
--- 工具函数
+-- 通用工具函数
 -- ============================================
 
 function notify(title, message)
@@ -188,6 +326,9 @@ windowHistory = {}
 
 -- 循环状态记录：每个窗口的左右半屏循环状态
 cycleState = {}
+
+-- 三分之一循环状态
+thirdCycleState = {}
 
 -- 保存窗口原始状态
 function saveWindowState(win)

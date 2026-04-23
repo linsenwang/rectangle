@@ -5,14 +5,8 @@
 TileManager = {}
 TileManager.originalLayouts = {}
 
--- 平铺配置
--- mode: "single" - 只在主显示器平铺所有窗口
---       "multi"  - 将窗口均匀分配到所有显示器  
---       "perScreen" - 每个显示器平铺自己的窗口
-TileManager.config = {
-    spacing = 0,        -- 默认间距（可以是负数，表示重叠）
-    mode = "single",    -- 默认单显示器模式
-}
+-- 使用 config.lua 中的平铺配置
+TileManager.config = TilingConfig
 
 -- 循环切换平铺模式
 function TileManager.cycleMode()

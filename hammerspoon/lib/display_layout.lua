@@ -7,7 +7,7 @@ local DisplayLayoutManager = {
     savedLayouts = {},          -- 按屏幕配置保存的布局
     lastScreenCount = 0,        -- 上次屏幕数量
     isRestoring = false,        -- 是否正在恢复中（避免递归）
-    stateFile = CONFIG_PATH .. "display_layouts.json",
+    stateFile = CONFIG_PATH .. DisplayLayoutConfig.stateFile,
 }
 
 -- 获取当前屏幕配置的唯一标识

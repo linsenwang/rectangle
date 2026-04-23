@@ -14,6 +14,7 @@ require("edge_dock")       -- Edge Dock（必须在 tiling 之前加载）
 require("tiling")          -- 窗口平铺（依赖 EdgeDock）
 require("auto_dock")       -- 自动停靠（依赖 EdgeDock）
 require("display_layout")  -- 显示器布局记忆
+require("capswriter")      -- CapsWriter 鼠标侧键触发录音（UDP 控制）
 
 -- ============================================
 -- 启动提示

@@ -100,11 +100,18 @@
 - **零间距**：窗口紧密排列（默认）
 - **负间距**：窗口之间有重叠
 
-示例配置：
+在 `config.lua` 中修改：
 ```lua
--- 在 init.lua 中修改默认间距
-TileManager.config.spacing = 0  -- 默认无间距
+TilingConfig = {
+    spacing = 0,        -- 默认间距
+    mode = "single",    -- 平铺模式
+}
 ```
+
+平铺模式：
+- `"single"` - 只在主显示器平铺所有窗口（默认）
+- `"multi"` - 将窗口均匀分配到所有显示器
+- `"perScreen"` - 每个显示器平铺自己的窗口
 
 ### 工作区布局
 
@@ -180,14 +187,71 @@ TileManager.config.spacing = 0  -- 默认无间距
 - **参考文档**：查阅资料时把浏览器页面临存
 - **音乐播放**：Spotify、网易云音乐等
 
+## 配置中心
+
+所有配置都集中在 `hammerspoon/lib/config.lua` 文件中，方便统一管理：
+
+### 配置文件结构
+
+```lua
+-- ============================================
+-- 1. 修饰键配置
+-- ============================================
+mash = {"ctrl", "alt"}           -- 主修饰键
+mashShift = {"ctrl", "alt", "shift"}  -- 带 Shift 的修饰键
+
+-- ============================================
+-- 2. 边距配置（四层优先级）
+-- ============================================
+margin              -- 全局默认边距
+appMargins          -- 应用特定边距
+displayMargins      -- 显示器特定边距
+appDisplayMargins   -- 应用+显示器组合配置（最高优先级）
+
+-- ============================================
+-- 3. Edge Dock 配置
+-- ============================================
+EdgeDockConfig = {
+    maxSlots = 7,       -- 槽位数量
+    barWidth = 3,       -- 小条宽度
+    colors = {...},     -- 深色/浅色模式颜色
+    knownAppColors = {...},  -- 应用图标颜色
+}
+
+-- ============================================
+-- 4. 窗口平铺配置
+-- ============================================
+TilingConfig = {
+    spacing = 0,        -- 窗口间距
+    mode = "single",    -- 平铺模式
+}
+
+-- ============================================
+-- 5. 自动停靠配置
+-- ============================================
+AutoDockConfig = {
+    ["Music"] = 4,  -- 应用名 = 槽位编号
+}
+
+-- ============================================
+-- 6. 显示器布局记忆配置
+-- ============================================
+DisplayLayoutConfig = {
+    stateFile = "display_layouts.json",
+    autoRestoreOnConnect = true,
+}
+```
+
 ## 边距配置
 
 窗口布局会自动留出边距，支持**全局默认**、**应用特定**、**显示器特定**以及**应用+显示器组合**四种层级的配置。
 
 ### 全局默认边距
 
+在 `config.lua` 中修改：
+
 ```lua
-local margin = {
+margin = {
     left = 20,   -- 左侧边距（距离屏幕左边缘）
     right = 20,  -- 右侧边距（距离屏幕右边缘）
     inner = 30,  -- 中间边距（窗口之间的空隙）
@@ -199,7 +263,7 @@ local margin = {
 为特定应用设置不同的边距（如 Chrome 有侧栏需要更大的左边距）：
 
 ```lua
-local appMargins = {
+appMargins = {
     ["Google Chrome"] = { left = 80, right = 11, inner = 40 },
     ["Safari"] = { left = 20, right = 11, inner = 40 },
     ["Code"] = { left = 60, right = 11, inner = 40 },
@@ -213,12 +277,12 @@ local appMargins = {
 为不同显示器设置边距（如外接大屏使用更大的边距）：
 
 ```lua
-local displayMargins = {
+displayMargins = {
     -- 通过屏幕名称匹配
     ["Built-in Retina Display"] = { left = 11, right = 11, inner = 40 },
     ["DELL U2723QE"] = { left = 20, right = 20, inner = 50 },
     
-    -- 通过屏幕ID匹配（格式：screen_ + ID）
+    -- 通过屏幕ID匹配（格式：screen_ID）
     ["screen_69731840"] = { left = 15, right = 15, inner = 45 },
 }
 ```
@@ -230,7 +294,7 @@ local displayMargins = {
 针对特定应用在特定显示器上的边距：
 
 ```lua
-local appDisplayMargins = {
+appDisplayMargins = {
     ["Google Chrome"] = {
         ["Built-in Retina Display"] = { left = 60, right = 11, inner = 40 },
         ["DELL U2723QE"] = { left = 100, right = 20, inner = 50 },
@@ -253,50 +317,36 @@ local appDisplayMargins = {
 
 ## Edge Dock 配置
 
-可以在 `init.lua` 中调整 Edge Dock 外观和行为：
+在 `config.lua` 中调整 Edge Dock 外观和行为：
 
 ```lua
-config = {
-    maxSlots = 5,       -- 槽位数量
-    barWidth = 6,       -- 小条宽度
-    barHeight = 230,    -- 小条高度
+EdgeDockConfig = {
+    maxSlots = 7,       -- 最大槽位数（1-9）
+    barWidth = 3,       -- 小条宽度
+    topMargin = 6,      -- 顶部边距
+    bottomMargin = 6,   -- 底部边距
     barGap = 10,        -- 小条间距
-    hideDelay = 0,      -- 自动收起延迟（秒），0表示立即收起
-}
-```
-
-### 深色/浅色模式颜色配置
-
-Edge Dock 支持根据系统外观模式自动切换颜色：
-
-```lua
-colors = {
-    dark = {
-        emptyBar = {alpha = 0.3, red = 0.3, green = 0.3, blue = 0.3},      -- 空槽位颜色
-        emptyText = {alpha = 0.4, red = 1, green = 1, blue = 1},           -- 空槽位文字颜色
-        highlightOccupied = {alpha = 0.9, red = 0.3, green = 0.7, blue = 1.0},  -- 高亮-有窗口
-        highlightEmpty = {alpha = 0.6, red = 0.5, green = 0.5, blue = 0.5},     -- 高亮-空槽位
-        highlightText = {alpha = 1, red = 1, green = 1, blue = 1},          -- 高亮文字颜色
-        normalOccupiedText = {alpha = 1, red = 0, green = 0, blue = 0},     -- 正常-有窗口文字
-        mask = {alpha = 1, red = 0, green = 0, blue = 0},                   -- 遮罩条颜色
+    hideDelay = 0,      -- 自动收起延迟（秒）
+    centeredPause = true,  -- 居中后暂停检测
+    
+    -- 鼠标触发范围
+    triggerRange = {
+        leftExtend = 7,
+        rightExtend = 5,
+        topExtend = 5,
+        bottomExtend = 5,
     },
-    light = {
-        emptyBar = {alpha = 0.25, red = 0.7, green = 0.7, blue = 0.7},      -- 空槽位颜色（浅灰）
-        emptyText = {alpha = 0.5, red = 0.3, green = 0.3, blue = 0.3},      -- 空槽位文字颜色（深灰）
-        highlightOccupied = {alpha = 0.9, red = 0.2, green = 0.5, blue = 0.9},  -- 高亮-有窗口（深蓝）
-        highlightEmpty = {alpha = 0.5, red = 0.6, green = 0.6, blue = 0.6},     -- 高亮-空槽位
-        highlightText = {alpha = 1, red = 1, green = 1, blue = 1},          -- 高亮文字颜色
-        normalOccupiedText = {alpha = 1, red = 1, green = 1, blue = 1},     -- 正常-有窗口文字
-        mask = {alpha = 1, red = 1, green = 1, blue = 1},                   -- 遮罩条颜色（白色）
+    
+    -- 颜色配置
+    colors = { dark = {...}, light = {...} },
+    
+    -- 应用图标颜色
+    knownAppColors = {
+        ["WeChat"] = { dark = {...}, light = {...} },
+        ["Chrome"] = { dark = {...}, light = {...} },
     }
 }
 ```
-
-系统会自动检测外观模式变化并刷新颜色。
-
-### 应用图标颜色配置
-
-已知应用的颜色也支持深浅模式：
 
 ```lua
 knownAppColors = {
@@ -313,6 +363,18 @@ knownAppColors = {
 ```
 
 如果某个模式未定义，会自动回退到另一个模式的颜色。
+
+### 自动停靠配置
+
+设置特定应用打开时自动停靠到指定槽位：
+
+```lua
+AutoDockConfig = {
+    ["Music"] = 4,    -- Apple Music 打开时自动停靠到槽位 4
+    ["WeChat"] = 1,   -- 微信打开时自动停靠到槽位 1
+    ["Safari"] = 2,   -- Safari 打开时自动停靠到槽位 2
+}
+```
 
 ## 高级功能
 
@@ -336,6 +398,16 @@ knownAppColors = {
 - 首次使用需要在显示器断开前手动保存一次布局（`⌃⌥⌘ D`），或让系统自动保存
 - 恢复时会智能匹配窗口（通过窗口 ID、应用名和标题）
 - 如果某些窗口已经关闭，它们会被跳过
+
+在 `config.lua` 中修改配置：
+```lua
+DisplayLayoutConfig = {
+    stateFile = "display_layouts.json",     -- 状态文件名
+    autoSaveOnDisconnect = false,            -- 断开时自动保存
+    autoRestoreOnConnect = true,             -- 连接时自动恢复
+    restoreDelay = 1.5,                      -- 恢复延迟（秒）
+}
+```
 
 ## 故障排除
 

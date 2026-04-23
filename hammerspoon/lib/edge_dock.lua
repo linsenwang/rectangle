@@ -2,49 +2,13 @@
 -- 边缘窗口坞（Edge Dock）- 常驻小条 + 拖拽停靠
 -- ============================================
 
+-- 使用 config.lua 中的配置
 EdgeDock = {
     slots = {},             -- 槽位 {win, originalFrame, appName, isShowing, hideTimer}
     bars = {},              -- 小条 UI 元素
     mask = nil,             -- 右侧遮罩条（遮挡可能露出的窗口边缘）
     currentBarScreen = nil,  -- 当前小条所在的屏幕（用于多显示器检测）
-    config = {
-        maxSlots = 7,       -- 最大槽位数
-        barWidth = 3,       -- 小条宽度
-        topMargin = 6,      -- 顶部边距（距离屏幕上边缘）
-        bottomMargin = 6,   -- 底部边距（距离屏幕下边缘）
-        barGap = 10,        -- 小条之间的空隙
-        peekWidth = 1,      -- 窗口 peek 出来的宽度
-        hideDelay = 0,      -- 鼠标离开后多久收起（秒）
-        centeredPause = true,  -- 居中后暂停鼠标移出检测
-        -- 鼠标触发范围配置（像素）
-        triggerRange = {
-            leftExtend = 7,   -- 槽位左侧向左扩展的触发范围
-            rightExtend = 5,   -- 屏幕右边缘向右扩展的触发范围
-            topExtend = 5,     -- 槽位顶部向上扩展的触发范围
-            bottomExtend = 5,  -- 槽位底部向下扩展的触发范围
-        },
-        -- 深色/浅色模式颜色配置
-        colors = {
-            dark = {
-                emptyBar = {alpha = 0.3, red = 0.3, green = 0.3, blue = 0.3},      -- 空槽位颜色
-                emptyText = {alpha = 0, red = 1, green = 1, blue = 1},           -- 空槽位文字颜色
-                highlightOccupied = {alpha = 0.9, red = 0.3, green = 0.7, blue = 1.0},  -- 高亮-有窗口
-                highlightEmpty = {alpha = 0.6, red = 0.5, green = 0.5, blue = 0.5},     -- 高亮-空槽位
-                highlightText = {alpha = 1, red = 1, green = 1, blue = 1},          -- 高亮文字颜色
-                normalOccupiedText = {alpha = 1, red = 0, green = 0, blue = 0},     -- 正常-有窗口文字
-                mask = {alpha = 1, red = 0, green = 0, blue = 0},                   -- 遮罩条颜色
-            },
-            light = {
-                emptyBar = {alpha = 0.2, red = 0.7, green = 0.7, blue = 0.7},      -- 空槽位颜色（浅灰）
-                emptyText = {alpha = 0, red = 0.3, green = 0.3, blue = 0.3},      -- 空槽位文字颜色（深灰）
-                highlightOccupied = {alpha = 0.9, red = 0.2, green = 0.5, blue = 0.9},  -- 高亮-有窗口（深蓝）
-                highlightEmpty = {alpha = 0.5, red = 0.6, green = 0.6, blue = 0.6},     -- 高亮-空槽位
-                highlightText = {alpha = 1, red = 1, green = 1, blue = 1},          -- 高亮文字颜色
-                normalOccupiedText = {alpha = 1, red = 1, green = 1, blue = 1},     -- 正常-有窗口文字（浅色模式用白色）
-                mask = {alpha = 1, red = 0, green = 0, blue = 0},                   -- 遮罩条颜色
-            }
-        }
-    }
+    config = EdgeDockConfig  -- 引用全局配置
 }
 
 -- 缓存应用颜色
@@ -72,46 +36,9 @@ function EdgeDock.getCurrentColors()
     return EdgeDock.config.colors[mode] or EdgeDock.config.colors.dark
 end
 
--- 常用应用颜色表（支持深色/浅色模式）
--- 如果不指定某个模式，则回退到另一个模式
-EdgeDock.knownAppColors = {
-    ["WeChat"] = {
-        dark  = {red = 0.40, green = 0.65, blue = 0.45},
-        light = {red = 0.15, green = 0.35, blue = 0.20}, -- 更深
-    },
-    ["ChatGPT"] = {
-        dark  = {red = 0.65, green = 0.65, blue = 0.65},
-        light = {red = 0.18, green = 0.18, blue = 0.18}, -- 接近石墨灰
-    },
-    ["Music"] = {
-        dark  = {red = 1.00, green = 0.30, blue = 0.38},
-        light = {red = 0.45, green = 0.18, blue = 0.25}, -- 压暗
-    },
-    ["Kimi"] = {
-        dark  = {red = 0.55, green = 0.60, blue = 0.80},
-        light = {red = 0.28, green = 0.38, blue = 0.60}, -- 更深蓝
-    },
-    ["Safari"] = {
-        dark  = {red = 0.25, green = 0.65, blue = 1.00},
-        light = {red = 0.05, green = 0.38, blue = 0.80}, -- 更沉
-    },
-    ["Chrome"] = {
-        dark  = {red = 1.00, green = 0.40, blue = 0.20},
-        light = {red = 0.65, green = 0.18, blue = 0.05}, -- 深红橙
-    },
-    ["Code"] = {
-        dark  = {red = 0.25, green = 0.55, blue = 0.95},
-        light = {red = 0.05, green = 0.30, blue = 0.60}, -- 深蓝
-    },
-    ["Terminal"] = {
-        dark  = {red = 0.70, green = 0.70, blue = 0.70},
-        light = {red = 0.12, green = 0.12, blue = 0.12}, -- 更深黑灰
-    },
-}
-
 -- 获取应用在当前模式下的颜色
 function EdgeDock.getKnownAppColor(appName)
-    local colorEntry = EdgeDock.knownAppColors[appName]
+    local colorEntry = EdgeDockConfig.knownAppColors[appName]
     if not colorEntry then
         return nil
     end
