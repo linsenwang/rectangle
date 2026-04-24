@@ -15,6 +15,7 @@ require("tiling")          -- 窗口平铺（依赖 EdgeDock）
 require("auto_dock")       -- 自动停靠（依赖 EdgeDock）
 require("display_layout")  -- 显示器布局记忆
 require("capswriter")      -- CapsWriter 鼠标侧键触发录音（UDP 控制）
+require("keybindings")     -- 快捷键帮助面板 (Ctrl+Option+/)
 
 -- ============================================
 -- 启动提示
