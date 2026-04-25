@@ -40,7 +40,7 @@ local function startRecording(source)
     if not isRecording then
         sendUDP("START")
         isRecording = true
-        hs.alert.show("🎤 录音开始", M.config.alertTimeout)
+        hs.alert.show("录音开始", M.config.alertTimeout)
         print(string.format("[CapsWriter] 录音开始 | source=%s", source))
     end
 end
@@ -50,7 +50,7 @@ local function stopRecording(source)
     if isRecording then
         sendUDP("STOP")
         isRecording = false
-        hs.alert.show("⏹ 录音结束", M.config.alertTimeout)
+        hs.alert.show("录音结束", M.config.alertTimeout)
         print(string.format("[CapsWriter] 录音结束 | source=%s", source))
     end
 end

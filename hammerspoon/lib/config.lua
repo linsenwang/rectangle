@@ -164,9 +164,9 @@ TilingConfig = {
 
 AutoDockConfig = {
     -- 应用名 = 槽位编号 (1-9)
-    -- ["Music"] = 4,  -- Apple Music 停靠到槽位 4
-    -- ["WeChat"] = 1, -- 微信停靠到槽位 1
-    -- ["Safari"] = 2, -- Safari 停靠到槽位 2
+    ["Music"] = 5,  -- Apple Music 停靠到槽位 5
+    ["ChatGPT"] = 2,
+    ["WeChat"] = 1, -- 微信停靠到槽位 1
 }
 
 -- ============================================
