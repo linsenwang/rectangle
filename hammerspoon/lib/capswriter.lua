@@ -123,6 +123,20 @@ function M.isRunning()
     return mouseRunning or keyRunning
 end
 
+-- ========== 手柄外部调用接口 ==========
+-- 供手柄映射工具通过 AppleScript 调用：
+-- osascript -e 'tell application "Hammerspoon" to execute lua code "CapsWriterGamepadStart()"'
+_G.CapsWriterGamepadStart = function()
+    startRecording("gamepad")
+end
+_G.CapsWriterGamepadStop = function()
+    stopRecording("gamepad")
+end
+
+-- 启用 AppleScript 支持，允许外部程序（如手柄映射工具）调用 Hammerspoon
+local appleScriptResult = hs.allowAppleScript(true)
+print("[CapsWriter] hs.allowAppleScript(true) result: " .. tostring(appleScriptResult))
+
 -- 自动启动
 M.start()
 
