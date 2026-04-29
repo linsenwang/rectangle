@@ -171,6 +171,89 @@ function TileManager.calcGrid(count)
     return cols, rows
 end
 
+-- 在指定区域内平铺一组窗口（内部辅助函数）
+-- @param windows 窗口列表
+-- @param area 区域 {x, y, w, h}
+-- @param spacing 间距
+function TileManager._tileInArea(windows, area, spacing)
+    local count = #windows
+    if count == 0 then return end
+
+    local cols, rows = TileManager.calcGrid(count)
+    local cellW = area.w / cols
+    local cellH = area.h / rows
+
+    for i, win in ipairs(windows) do
+        local col = (i - 1) % cols
+        local row = math.floor((i - 1) / cols)
+
+        local w = cellW - spacing * 2
+        local h = cellH - spacing * 2
+
+        local cellCenterX = area.x + col * cellW + cellW / 2
+        local cellCenterY = area.y + row * cellH + cellH / 2
+
+        local x = cellCenterX - w / 2
+        local y = cellCenterY - h / 2
+
+        if x < area.x then x = area.x end
+        if y < area.y then y = area.y end
+        if x + w > area.x + area.w then w = area.x + area.w - x end
+        if y + h > area.y + area.h then h = area.y + area.h - y end
+
+        w = math.max(w, 100)
+        h = math.max(h, 100)
+
+        setWinFrame(win, hs.geometry.rect(x, y, w, h))
+    end
+end
+
+-- 多显示器均分平铺（内部辅助函数）
+-- @param windows 窗口列表
+-- @param areas 区域列表
+-- @param spacing 间距
+function TileManager._tileMulti(windows, areas, spacing)
+    local count = #windows
+    if count == 0 then return end
+
+    local screenCount = #areas
+    local windowsPerScreen = math.ceil(count / screenCount)
+
+    for i, win in ipairs(windows) do
+        local screenIdx = math.min(math.ceil(i / windowsPerScreen), screenCount)
+        local area = areas[screenIdx]
+
+        local indexInScreen = i - (screenIdx - 1) * windowsPerScreen
+        local windowsInThisScreen = math.min(windowsPerScreen, count - (screenIdx - 1) * windowsPerScreen)
+
+        local cols, rows = TileManager.calcGrid(windowsInThisScreen)
+
+        local col = (indexInScreen - 1) % cols
+        local row = math.floor((indexInScreen - 1) / cols)
+
+        local cellW = area.w / cols
+        local cellH = area.h / rows
+        local w = cellW - spacing * 2
+        local h = cellH - spacing * 2
+
+        local cellCenterX = area.x + col * cellW + cellW / 2
+        local cellCenterY = area.y + row * cellH + cellH / 2
+
+        local x = cellCenterX - w / 2
+        local y = cellCenterY - h / 2
+
+        if x < area.x then x = area.x end
+        if y < area.y then y = area.y end
+        if x + w > area.x + area.w then w = area.x + area.w - x end
+        if y + h > area.y + area.h then h = area.y + area.h - y end
+
+        w = math.max(w, 100)
+        h = math.max(h, 100)
+
+        setWinFrame(win, hs.geometry.rect(x, y, w, h))
+    end
+end
+
 -- 平铺指定应用的窗口
 -- @param appName 应用名称（可选，不传则平铺当前应用）
 -- @param spacing 间距（可选，默认使用 TileManager.config.spacing）
@@ -224,125 +307,24 @@ function TileManager.tile(appName, spacing)
     local mode = TileManager.config.mode
     
     if mode == "single" or #areas == 1 then
-        -- 单显示器模式：使用原来的逻辑
-        local area = areas[1]
-        local cols, rows = TileManager.calcGrid(count)
-        
-        local cellW = area.w / cols
-        local cellH = area.h / rows
-        
-        for i, win in ipairs(windows) do
-            local col = (i - 1) % cols
-            local row = math.floor((i - 1) / cols)
-            
-            local w = cellW - spacing * 2
-            local h = cellH - spacing * 2
-            
-            local cellCenterX = area.x + col * cellW + cellW / 2
-            local cellCenterY = area.y + row * cellH + cellH / 2
-            
-            local x = cellCenterX - w / 2
-            local y = cellCenterY - h / 2
-            
-            if x < area.x then x = area.x end
-            if y < area.y then y = area.y end
-            if x + w > area.x + area.w then w = area.x + area.w - x end
-            if y + h > area.y + area.h then h = area.y + area.h - y end
-            
-            w = math.max(w, 100)
-            h = math.max(h, 100)
-            
-            setWinFrame(win, hs.geometry.rect(x, y, w, h))
-        end
-        
+        TileManager._tileInArea(windows, areas[1], spacing)
         local spacingText = spacing == 0 and "" or " (间距: " .. spacing .. "px)"
         notify("平铺完成", appName .. " " .. count .. " 个窗口" .. spacingText)
-        
+
     elseif mode == "multi" then
-        -- 多显示器均分模式
-        local screenCount = #areas
-        local windowsPerScreen = math.ceil(count / screenCount)
-        
-        for i, win in ipairs(windows) do
-            local screenIdx = math.min(math.ceil(i / windowsPerScreen), screenCount)
-            local area = areas[screenIdx]
-            
-            local indexInScreen = i - (screenIdx - 1) * windowsPerScreen
-            local windowsInThisScreen = math.min(windowsPerScreen, count - (screenIdx - 1) * windowsPerScreen)
-            
-            local cols, rows = TileManager.calcGrid(windowsInThisScreen)
-            
-            local col = (indexInScreen - 1) % cols
-            local row = math.floor((indexInScreen - 1) / cols)
-            
-            local cellW = area.w / cols
-            local cellH = area.h / rows
-            local w = cellW - spacing * 2
-            local h = cellH - spacing * 2
-            
-            local cellCenterX = area.x + col * cellW + cellW / 2
-            local cellCenterY = area.y + row * cellH + cellH / 2
-            
-            local x = cellCenterX - w / 2
-            local y = cellCenterY - h / 2
-            
-            if x < area.x then x = area.x end
-            if y < area.y then y = area.y end
-            if x + w > area.x + area.w then w = area.x + area.w - x end
-            if y + h > area.y + area.h then h = area.y + area.h - y end
-            
-            w = math.max(w, 100)
-            h = math.max(h, 100)
-            
-            setWinFrame(win, hs.geometry.rect(x, y, w, h))
-        end
-        
+        TileManager._tileMulti(windows, areas, spacing)
         local spacingText = spacing == 0 and "" or " (间距: " .. spacing .. "px)"
         notify("平铺完成 [多显示器均分]", appName .. " " .. count .. " 个窗口" .. spacingText)
-        
+
     elseif mode == "perScreen" then
-        -- 各屏独立平铺模式
         local groups = TileManager.groupWindowsByScreen(windows, areas)
         local tiledCount = 0
-        
+
         for screenId, group in pairs(groups) do
-            local screenWindows = group.windows
-            local screenCount = #screenWindows
-            
-            if screenCount > 0 then
-                local area = group.area
-                local cols, rows = TileManager.calcGrid(screenCount)
-                
-                local cellW = area.w / cols
-                local cellH = area.h / rows
-                
-                for i, win in ipairs(screenWindows) do
-                    local col = (i - 1) % cols
-                    local row = math.floor((i - 1) / cols)
-                    
-                    local w = cellW - spacing * 2
-                    local h = cellH - spacing * 2
-                    
-                    local cellCenterX = area.x + col * cellW + cellW / 2
-                    local cellCenterY = area.y + row * cellH + cellH / 2
-                    
-                    local x = cellCenterX - w / 2
-                    local y = cellCenterY - h / 2
-                    
-                    if x < area.x then x = area.x end
-                    if y < area.y then y = area.y end
-                    if x + w > area.x + area.w then w = area.x + area.w - x end
-                    if y + h > area.y + area.h then h = area.y + area.h - y end
-                    
-                    w = math.max(w, 100)
-                    h = math.max(h, 100)
-                    
-                    setWinFrame(win, hs.geometry.rect(x, y, w, h))
-                    tiledCount = tiledCount + 1
-                end
-            end
+            TileManager._tileInArea(group.windows, group.area, spacing)
+            tiledCount = tiledCount + #group.windows
         end
-        
+
         local spacingText = spacing == 0 and "" or " (间距: " .. spacing .. "px)"
         notify("平铺完成 [各屏独立]", appName .. " " .. tiledCount .. " 个窗口" .. spacingText)
     end
@@ -390,127 +372,29 @@ function TileManager.tileAll(spacing)
     local mode = TileManager.config.mode
     
     if mode == "single" or #areas == 1 then
-        -- 单显示器模式
-        local area = areas[1]
-        local cols, rows = TileManager.calcGrid(count)
-        
-        local cellW = area.w / cols
-        local cellH = area.h / rows
-        
-        for i, win in ipairs(allWindows) do
-            local col = (i - 1) % cols
-            local row = math.floor((i - 1) / cols)
-            
-            local w = cellW - spacing * 2
-            local h = cellH - spacing * 2
-            
-            local cellCenterX = area.x + col * cellW + cellW / 2
-            local cellCenterY = area.y + row * cellH + cellH / 2
-            
-            local x = cellCenterX - w / 2
-            local y = cellCenterY - h / 2
-            
-            if x < area.x then x = area.x end
-            if y < area.y then y = area.y end
-            if x + w > area.x + area.w then w = area.x + area.w - x end
-            if y + h > area.y + area.h then h = area.y + area.h - y end
-            
-            w = math.max(w, 100)
-            h = math.max(h, 100)
-            
-            setWinFrame(win, hs.geometry.rect(x, y, w, h))
-        end
-        
+        TileManager._tileInArea(allWindows, areas[1], spacing)
         local spacingText = spacing == 0 and "" or " (间距: " .. spacing .. "px)"
         notify("全局平铺完成", "共 " .. count .. " 个窗口" .. spacingText)
-        
+
     elseif mode == "multi" then
-        -- 多显示器均分模式
-        local screenCount = #areas
-        local windowsPerScreen = math.ceil(count / screenCount)
-        
-        for i, win in ipairs(allWindows) do
-            local screenIdx = math.min(math.ceil(i / windowsPerScreen), screenCount)
-            local area = areas[screenIdx]
-            
-            local indexInScreen = i - (screenIdx - 1) * windowsPerScreen
-            local windowsInThisScreen = math.min(windowsPerScreen, count - (screenIdx - 1) * windowsPerScreen)
-            
-            local cols, rows = TileManager.calcGrid(windowsInThisScreen)
-            
-            local col = (indexInScreen - 1) % cols
-            local row = math.floor((indexInScreen - 1) / cols)
-            
-            local cellW = area.w / cols
-            local cellH = area.h / rows
-            local w = cellW - spacing * 2
-            local h = cellH - spacing * 2
-            
-            local cellCenterX = area.x + col * cellW + cellW / 2
-            local cellCenterY = area.y + row * cellH + cellH / 2
-            
-            local x = cellCenterX - w / 2
-            local y = cellCenterY - h / 2
-            
-            if x < area.x then x = area.x end
-            if y < area.y then y = area.y end
-            if x + w > area.x + area.w then w = area.x + area.w - x end
-            if y + h > area.y + area.h then h = area.y + area.h - y end
-            
-            w = math.max(w, 100)
-            h = math.max(h, 100)
-            
-            setWinFrame(win, hs.geometry.rect(x, y, w, h))
-        end
-        
+        TileManager._tileMulti(allWindows, areas, spacing)
         local spacingText = spacing == 0 and "" or " (间距: " .. spacing .. "px)"
         notify("全局平铺完成 [多显示器均分]", "共 " .. count .. " 个窗口" .. spacingText)
-        
+
     elseif mode == "perScreen" then
-        -- 各屏独立平铺模式
         local groups = TileManager.groupWindowsByScreen(allWindows, areas)
         local tiledCount = 0
         local screenInfo = {}
-        
+
         for screenId, group in pairs(groups) do
-            local screenWindows = group.windows
-            local screenCount = #screenWindows
-            
+            local screenCount = #group.windows
             if screenCount > 0 then
                 table.insert(screenInfo, screenCount)
-                local area = group.area
-                local cols, rows = TileManager.calcGrid(screenCount)
-                
-                local cellW = area.w / cols
-                local cellH = area.h / rows
-                
-                for i, win in ipairs(screenWindows) do
-                    local col = (i - 1) % cols
-                    local row = math.floor((i - 1) / cols)
-                    
-                    local w = cellW - spacing * 2
-                    local h = cellH - spacing * 2
-                    
-                    local cellCenterX = area.x + col * cellW + cellW / 2
-                    local cellCenterY = area.y + row * cellH + cellH / 2
-                    
-                    local x = cellCenterX - w / 2
-                    local y = cellCenterY - h / 2
-                    
-                    if x < area.x then x = area.x end
-                    if y < area.y then y = area.y end
-                    if x + w > area.x + area.w then w = area.x + area.w - x end
-                    if y + h > area.y + area.h then h = area.y + area.h - y end
-                    
-                    w = math.max(w, 100)
-                    h = math.max(h, 100)
-                    
-                    setWinFrame(win, hs.geometry.rect(x, y, w, h))
-                    tiledCount = tiledCount + 1
-                end
+                TileManager._tileInArea(group.windows, group.area, spacing)
+                tiledCount = tiledCount + screenCount
             end
         end
-        
+
         table.sort(screenInfo)
         local distribution = table.concat(screenInfo, "+")
         local spacingText = spacing == 0 and "" or " (间距: " .. spacing .. "px)"
@@ -618,3 +502,125 @@ function TileManager.isWindowInEdgeDock(win)
     end
     return false
 end
+
+-- ============================================
+-- 开发工具平铺：将 VS Code 和 Terminal 移到主显示器并平铺
+-- ============================================
+
+-- 配置：开发工具应用列表（可按需修改）
+TileManager.devToolApps = {"Code", "Ghostty"}
+
+function TileManager.tileDevTools(spacing)
+    spacing = spacing or TileManager.config.spacing
+    local key = "_dev_tools_original_"
+
+    -- 如果已保存布局，则恢复（toggle 行为）
+    if TileManager.originalLayouts[key] then
+        TileManager.restoreDevTools()
+        return
+    end
+
+    -- 收集所有目标应用的窗口
+    local allWindows = {}
+    local foundApps = {}
+
+    for _, appName in ipairs(TileManager.devToolApps) do
+        local app = hs.application.get(appName)
+        if app then
+            table.insert(foundApps, appName)
+            for _, win in ipairs(app:allWindows()) do
+                if win:isStandard() and not TileManager.isWindowInEdgeDock(win) then
+                    table.insert(allWindows, win)
+                end
+            end
+        end
+    end
+
+    local count = #allWindows
+    if count == 0 then
+        notify("平铺失败", "没有找到 Code 或 Ghostty 的窗口")
+        return
+    end
+    if count == 1 then
+        notify("平铺提示", "只有1个窗口，无需平铺")
+        return
+    end
+
+    -- 保存原始布局
+    local original = {}
+    for _, win in ipairs(allWindows) do
+        table.insert(original, {id = win:id(), frame = win:frame()})
+    end
+    TileManager.originalLayouts[key] = original
+
+    local mode = TileManager.config.mode
+    local areas = TileManager.getTilingAreas()
+
+    if mode == "single" or #areas == 1 then
+        -- 单屏幕模式：鼠标所在屏幕
+        local targetScreen = hs.mouse.getCurrentScreen()
+        if not targetScreen then
+            notify("平铺失败", "无法获取鼠标所在显示器")
+            return
+        end
+
+        local frame = targetScreen:frame()
+        local area = {
+            x = frame.x,
+            y = frame.y,
+            w = frame.w,
+            h = frame.h
+        }
+
+        TileManager._tileInArea(allWindows, area, spacing)
+        local appsText = table.concat(foundApps, ", ")
+        local spacingText = spacing == 0 and "" or " (间距: " .. spacing .. "px)"
+        notify("开发工具平铺完成", appsText .. " 共 " .. count .. " 个窗口" .. spacingText)
+
+    elseif mode == "multi" then
+        -- 多显示器均分
+        TileManager._tileMulti(allWindows, areas, spacing)
+        local appsText = table.concat(foundApps, ", ")
+        local spacingText = spacing == 0 and "" or " (间距: " .. spacing .. "px)"
+        notify("开发工具平铺完成 [多显示器均分]", appsText .. " 共 " .. count .. " 个窗口" .. spacingText)
+
+    elseif mode == "perScreen" then
+        -- 各屏独立平铺
+        local groups = TileManager.groupWindowsByScreen(allWindows, areas)
+        local tiledCount = 0
+
+        for screenId, group in pairs(groups) do
+            TileManager._tileInArea(group.windows, group.area, spacing)
+            tiledCount = tiledCount + #group.windows
+        end
+
+        local appsText = table.concat(foundApps, ", ")
+        local spacingText = spacing == 0 and "" or " (间距: " .. spacing .. "px)"
+        notify("开发工具平铺完成 [各屏独立]", appsText .. " 共 " .. tiledCount .. " 个窗口" .. spacingText)
+    end
+end
+
+-- 恢复开发工具布局
+function TileManager.restoreDevTools()
+    local key = "_dev_tools_original_"
+    local original = TileManager.originalLayouts[key]
+    if not original then
+        notify("恢复失败", "没有找到保存的开发工具布局")
+        return
+    end
+
+    for _, item in ipairs(original) do
+        local win = hs.window.get(item.id)
+        if win and win:isStandard() then
+            setWinFrame(win, item.frame)
+        end
+    end
+
+    TileManager.originalLayouts[key] = nil
+    notify("已恢复", "开发工具窗口")
+end
+
+-- 快捷键：开发工具平铺/恢复 (Ctrl+Opt+Cmd+V)
+hs.hotkey.bind({"ctrl", "alt", "cmd"}, "v", function()
+    TileManager.tileDevTools()
+end)

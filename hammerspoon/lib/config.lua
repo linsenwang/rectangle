@@ -37,7 +37,7 @@ appMargins = {
     ["Google Chrome"] = { left = 11, right = 11, inner = 40 },
     -- ["Chrome"] = { left = 80, right = 11, inner = 40 },
     -- ["Safari"] = { left = 20, right = 11, inner = 40 },
-    -- ["Code"] = { left = 60, right = 11, inner = 40 },
+    ["Code"] = { left = 11, right = 11, inner = 40 },
 }
 
 -- 显示器特定边距配置（可选）
