@@ -79,3 +79,6 @@ hs.hotkey.bind({"ctrl", "alt", "cmd"}, "i", function()
     hs.alert.show(msg, 4)
     print("[ScreenInfo]\n" .. msg)
 end)
+
+-- Window Context: 自动截屏 OCR 并维护窗口上下文记忆
+-- require("window_context")
