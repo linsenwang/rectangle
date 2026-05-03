@@ -25,6 +25,15 @@ M.config = {
 -- 内部状态
 local isRecording = false
 local statusUdp = nil            -- UDP 状态监听对象
+local lastAlertUUID = nil        -- 上一个悬浮窗的 UUID，用于关闭避免重叠
+
+-- 显示提示（自动关闭上一个，避免重叠）
+local function showAlert(message, timeout)
+    if lastAlertUUID then
+        pcall(function() hs.alert.closeSpecific(lastAlertUUID) end)
+    end
+    lastAlertUUID = hs.alert.show(message, M.config.alertStyle, nil, timeout or M.config.alertTimeout)
+end
 
 -- 发送 UDP 命令（异步，不阻塞 Hammerspoon）
 local function sendUDP(cmd)
@@ -34,7 +43,7 @@ local function sendUDP(cmd)
     )
     hs.task.new("/usr/bin/python3", function(exitCode, stdOut, stdErr)
         if exitCode ~= 0 then
-            hs.alert.show("❌ CapsWriter UDP 发送失败\n" .. tostring(stdErr), M.config.alertStyle, nil, 2)
+            showAlert("❌ CapsWriter UDP 发送失败\n" .. tostring(stdErr), 2)
         end
     end, {"-c", pyScript}):start()
 end
@@ -81,7 +90,7 @@ sock.close()
                 if statusLine then
                     local statusType, message = statusLine:match("^([^|]+)|(.+)$")
                     if message then
-                        hs.alert.show(message, M.config.alertStyle, nil, M.config.alertTimeout)
+                        showAlert(message)
                         print(string.format("[CapsWriter] 状态更新: %s", message))
                     end
                 end
@@ -118,7 +127,7 @@ local function startRecording(source)
     if not isRecording then
         sendUDP("START")
         isRecording = true
-        hs.alert.show("录音开始", M.config.alertStyle, nil, M.config.alertTimeout)
+        showAlert("🎙️ 录音开始")
         print(string.format("[CapsWriter] 录音开始 | source=%s", source))
     end
 end
@@ -128,7 +137,7 @@ local function stopRecording(source)
     if isRecording then
         sendUDP("STOP")
         isRecording = false
-        hs.alert.show("录音结束", M.config.alertStyle, nil, M.config.alertTimeout)
+        showAlert("🛑 录音结束")
         print(string.format("[CapsWriter] 录音结束 | source=%s", source))
     end
 end
@@ -184,7 +193,7 @@ function M.start()
     startStatusListener()
 
     if #started > 0 then
-        hs.alert.show("🎙️ CapsWriter 监听已启动 | " .. table.concat(started, ", "), M.config.alertStyle, nil, 2)
+        showAlert("🎙️ CapsWriter 监听已启动 | " .. table.concat(started, ", "), 2)
     end
 end
 
@@ -196,7 +205,7 @@ function M.stop()
         M.keyBinding:disable()
     end
     stopStatusListener()
-    hs.alert.show("🎙️ CapsWriter 监听已停止", M.config.alertStyle, nil, 2)
+    showAlert("🎙️ CapsWriter 监听已停止", 2)
 end
 
 function M.isRunning()
