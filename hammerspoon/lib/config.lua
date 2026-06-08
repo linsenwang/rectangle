@@ -70,13 +70,15 @@ appDisplayMargins = {
 
 EdgeDockConfig = {
     maxSlots = 7,       -- 最大槽位数（1-9）
-    barWidth = 3,       -- 小条宽度（像素）
+    barWidth = 4,       -- 小条宽度（像素）
     topMargin = 6,      -- 顶部边距（距离屏幕上边缘）
     bottomMargin = 6,   -- 底部边距（距离屏幕下边缘）
     barGap = 10,        -- 小条之间的空隙（像素）
+    barRightOffset = 3, -- 小条距离屏幕右边缘的偏移（像素）
     peekWidth = 1,      -- 窗口 peek 出来的宽度（像素）
     hideDelay = 0,      -- 鼠标离开后多久收起（秒），0表示立即收起
     centeredPause = true,  -- 居中后暂停鼠标移出检测
+    showMask = false,      -- 是否显示右侧遮罩条（遮挡窗口边缘露出的一小角）
     
     -- 鼠标触发范围配置（像素）
     triggerRange = {

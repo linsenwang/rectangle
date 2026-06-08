@@ -155,7 +155,7 @@ function EdgeDock.getSlotPosition(slotIndex, screenFrame)
     local screen = screenFrame or EdgeDock.getCurrentScreen()
     local barHeight = EdgeDock.getBarHeight(screen)
     local startY = screen.y + EdgeDock.config.topMargin
-    local x = screen.x + screen.w - EdgeDock.config.barWidth - 5  -- 减5px给遮罩条留位置
+    local x = screen.x + screen.w - EdgeDock.config.barWidth - (EdgeDock.config.barRightOffset or 5)
     local y = startY + (slotIndex - 1) * (barHeight + EdgeDock.config.barGap)
     return x, y, EdgeDock.config.barWidth, barHeight
 end
@@ -184,6 +184,15 @@ end
 
 -- 创建/刷新右侧遮罩条（2px宽，遮挡可能被推出的窗口边缘）
 function EdgeDock.refreshMask()
+    -- 如果配置为不显示，删除已有遮罩条并返回
+    if EdgeDock.config.showMask == false then
+        if EdgeDock.mask then
+            EdgeDock.mask:delete()
+            EdgeDock.mask = nil
+        end
+        return
+    end
+
     if EdgeDock.mask then
         EdgeDock.mask:delete()
     end
