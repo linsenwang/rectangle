@@ -8,6 +8,25 @@ TileManager.originalLayouts = {}
 -- 使用 config.lua 中的平铺配置
 TileManager.config = TilingConfig
 
+-- 严格的窗口过滤：排除辅助窗口、对话框、无标题窗口等
+local function isRealWindow(win)
+    if not win or not win:isStandard() then return false end
+
+    -- 排除无标题窗口（很多辅助窗口没有标题）
+    local title = win:title()
+    if not title or title == "" then return false end
+
+    -- 只保留真正的标准窗口，排除对话框等
+    local subrole = win:subrole()
+    if subrole ~= "AXStandardWindow" then return false end
+
+    -- 排除极小窗口
+    local frame = win:frame()
+    if frame.w < 50 or frame.h < 50 then return false end
+
+    return true
+end
+
 -- 循环切换平铺模式
 function TileManager.cycleMode()
     local modes = {"single", "multi", "perScreen"}
@@ -278,7 +297,7 @@ function TileManager.tile(appName, spacing)
     
     local windows = {}
     for _, win in ipairs(app:allWindows()) do
-        if win:isStandard() then
+        if isRealWindow(win) then
             table.insert(windows, win)
         end
     end
@@ -339,7 +358,7 @@ function TileManager.tileAll(spacing)
     
     local allWindows = {}
     for _, win in ipairs(hs.window.allWindows()) do
-        if win:isStandard() and win:application() then
+        if isRealWindow(win) and win:application() then
             -- 排除 Edge Dock 中停靠的窗口
             if not TileManager.isWindowInEdgeDock(win) then
                 table.insert(allWindows, win)
@@ -420,7 +439,7 @@ function TileManager.restore(appName)
     
     for _, item in ipairs(original) do
         local win = hs.window.get(item.id)
-        if win and win:isStandard() then
+        if win and isRealWindow(win) then
             setWinFrame(win, item.frame)
         end
     end
@@ -529,7 +548,7 @@ function TileManager.tileDevTools(spacing)
         if app then
             table.insert(foundApps, appName)
             for _, win in ipairs(app:allWindows()) do
-                if win:isStandard() and not TileManager.isWindowInEdgeDock(win) then
+                if isRealWindow(win) and not TileManager.isWindowInEdgeDock(win) then
                     table.insert(allWindows, win)
                 end
             end
@@ -611,7 +630,7 @@ function TileManager.restoreDevTools()
 
     for _, item in ipairs(original) do
         local win = hs.window.get(item.id)
-        if win and win:isStandard() then
+        if win and isRealWindow(win) then
             setWinFrame(win, item.frame)
         end
     end
