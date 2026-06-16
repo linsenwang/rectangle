@@ -1,9 +1,60 @@
 -- ============================================
 -- 按键绑定帮助面板（按住显示，松手消失）
 -- 快捷键：Ctrl+Option + /
+-- 支持跟随系统浅色/深色外观自动切换配色
 -- ============================================
 
 local helpCanvas = nil
+
+-- 浅色 / 深色配色主题
+local themes = {
+    dark = {
+        titleColor   = { hex = "#FFD866" },              -- 黄色标题
+        keyColor     = { hex = "#78DCE8" },              -- 青色按键
+        descColor    = { hex = "#F8F8F2" },              -- 白色描述
+        dimColor     = { hex = "#75715E" },              -- 灰色分隔/提示
+        headerColor  = { hex = "#FF79C6" },              -- 粉色大标题
+        bgColor      = { hex = "#1E1E1E", alpha = 0.93 },
+        shadowColor  = { hex = "#000000", alpha = 0.4 },
+    },
+    light = {
+        titleColor   = { hex = "#9A6700" },              -- 深金色标题
+        keyColor     = { hex = "#0066CC" },              -- 蓝色按键
+        descColor    = { hex = "#1D1D1F" },              -- 深灰描述
+        dimColor     = { hex = "#8E8E93" },              -- 浅灰分隔/提示
+        headerColor  = { hex = "#AF52DE" },              -- 紫色大标题
+        bgColor      = { hex = "#F5F5F7", alpha = 0.95 },
+        shadowColor  = { hex = "#000000", alpha = 0.18 },
+    }
+}
+
+-- 获取当前应使用的主题名
+local function currentThemeName()
+    -- 方法1：Hammerspoon 原生 API
+    local style = hs.host.interfaceStyle()
+    print("[KeyBindings] hs.host.interfaceStyle() = " .. tostring(style))
+
+    if style == "Light" then
+        return "light"
+    elseif style == "Dark" then
+        return "dark"
+    end
+
+    -- 方法2：回退到 defaults 命令（interfaceStyle 返回 nil 或 Unknown 时）
+    local ok, result = pcall(function()
+        return hs.execute("defaults read -g AppleInterfaceStyle 2>/dev/null")
+    end)
+    if ok and result then
+        result = string.lower(string.gsub(result, "%s+", ""))
+        print("[KeyBindings] defaults AppleInterfaceStyle = '" .. tostring(result) .. "'")
+        if result == "dark" then
+            return "dark"
+        end
+    end
+
+    -- defaults 命令不存在/无输出时，系统实际为浅色模式
+    return "light"
+end
 
 -- 按键绑定列表
 local bindings = {
@@ -12,7 +63,7 @@ local bindings = {
         items = {
             { "⌃⌥ ←",      "左半屏循环 (1/2→2/3→5/6)" },
             { "⌃⌥ →",      "右半屏循环 (1/2→2/3→5/6)" },
-            { "⌃⌥ ↑",      "最大化" },
+            { "⌃⌥ ↑",      "上半屏" },
             { "⌃⌥ ↵",      "最大化 (应用边距)" },
             { "⌃⌥ C",      "窗口居中" },
             { "⌃⌥ ⇧↑",     "最大化高度" },
@@ -40,7 +91,8 @@ local bindings = {
             { "⌃⌥ -",      "缩小窗口" },
             { "⌃⌥ ⇧←",     "移到左边屏幕" },
             { "⌃⌥ ⇧→",     "移到右边屏幕" },
-            { "⌃⌥⌘ ↑",     "跨显示器移动（保持比例）" },
+            { "⌃⌥⌘ ↑",     "最大化高度" },
+            { "⌃⌥⌘ ↓",     "跨显示器移动（保持比例）" },
         }
     },
     {
@@ -80,6 +132,12 @@ local bindings = {
         }
     },
     {
+        title = "CapsWriter",
+        items = {
+            { "⇧→",        "按住录音，松开停止" },
+        }
+    },
+    {
         title = "其他",
         items = {
             { "⌃⌥⌘ I",     "屏幕信息查看" },
@@ -106,14 +164,17 @@ local function createHelpPanel()
         table.insert(col2Groups, bindings[i])
     end
 
+    -- 根据系统外观选择主题
+    local theme = themes[currentThemeName()]
+
     -- 样式参数
     local fontSize = 13
     local lineHeight = 18
-    local titleColor = { hex = "#FFD866" }      -- 黄色标题
-    local keyColor = { hex = "#78DCE8" }        -- 青色按键
-    local descColor = { hex = "#F8F8F2" }       -- 白色描述
-    local dimColor = { hex = "#75715E" }        -- 灰色分隔
-    local bgColor = { hex = "#1E1E1E", alpha = 0.93 }
+    local titleColor = theme.titleColor
+    local keyColor = theme.keyColor
+    local descColor = theme.descColor
+    local dimColor = theme.dimColor
+    local bgColor = theme.bgColor
 
     -- 计算列高度
     local function colHeight(groups)
@@ -150,7 +211,7 @@ local function createHelpPanel()
     helpCanvas:appendElements({
         type = "rectangle",
         action = "fill",
-        fillColor = { hex = "#000000", alpha = 0.4 },
+        fillColor = theme.shadowColor,
         roundedRectRadii = { xRadius = 14, yRadius = 14 },
         frame = { x = 4, y = 6, w = panelW, h = panelH },
     })
@@ -168,7 +229,7 @@ local function createHelpPanel()
     -- 顶部大标题
     local headerStyle = {
         font = { name = ".AppleSystemUIFont", size = 16 },
-        color = { hex = "#FF79C6" },
+        color = theme.headerColor,
         paragraphStyle = { alignment = "center" },
     }
     helpCanvas:appendElements({
@@ -197,7 +258,7 @@ local function createHelpPanel()
             -- 每个项目
             for _, item in ipairs(g.items) do
                 local keyStyle = {
-                    font = { name = ".AppleSystemUIFontMono", size = fontSize },
+                    font = { name = "Menlo", size = fontSize },
                     color = keyColor,
                 }
                 local descStyle = {
@@ -247,7 +308,16 @@ local function destroyHelpPanel()
     end
 end
 
+-- 监听系统外观变化，若帮助面板正在显示则重建以切换配色
+local themeWatcher = hs.distributednotifications.new(function()
+    print("[KeyBindings] 收到系统外观变化通知")
+    if helpCanvas then
+        createHelpPanel()
+    end
+end, "AppleInterfaceThemeChangedNotification")
+themeWatcher:start()
+
 -- 绑定：按下显示，松手消失
 hs.hotkey.bind(mash, "/", createHelpPanel, destroyHelpPanel)
 
-print("[KeyBindings] 帮助快捷键已加载 (Ctrl+Option+/ 按住显示)")
+print("[KeyBindings] 帮助快捷键已加载 (Ctrl+Option+/ 按住显示，自动跟随系统外观)")

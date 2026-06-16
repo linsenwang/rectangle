@@ -579,7 +579,7 @@ end
 -- 跨显示器移动窗口（保持布局模式）
 -- ============================================
 
-hs.hotkey.bind({"ctrl", "alt", "cmd"}, "up", function()
+local function moveToOtherScreen()
     local win = hs.window.focusedWindow()
     if not win then return end
 
@@ -649,7 +649,20 @@ hs.hotkey.bind({"ctrl", "alt", "cmd"}, "up", function()
     if finalScreen then
         print(string.format("[MoveScreen] 最终窗口所在屏幕: %s (id=%d)", finalScreen:name() or "?", finalScreen:id()))
     end
+end
+
+-- Ctrl+Alt+Cmd + ↑：最大化高度（保持窗口水平位置和宽度不变）
+hs.hotkey.bind({"ctrl", "alt", "cmd"}, "up", function()
+    local win = hs.window.focusedWindow()
+    if not win then return end
+    saveWindowState(win)
+    local max = getWinScreen(win)
+    local frame = win:frame()
+    setWinFrame(win, hs.geometry.rect(frame.x, max.y, frame.w, max.h))
 end)
+
+-- Ctrl+Alt+Cmd + ↓：跨显示器移动（保持布局模式）
+hs.hotkey.bind({"ctrl", "alt", "cmd"}, "down", moveToOtherScreen)
 
 -- ============================================
 -- 屏幕切换后自动调整半屏窗口高度
