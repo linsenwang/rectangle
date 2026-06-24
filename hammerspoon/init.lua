@@ -6,6 +6,9 @@
 -- 添加 lib 目录到模块搜索路径
 package.path = hs.configdir .. "/lib/?.lua;" .. package.path
 
+-- 启用 Hammerspoon IPC，便于 hs 命令行调试
+pcall(function() require("hs.ipc") end)
+
 -- 按依赖顺序加载模块
 require("config")          -- 配置、边距、工具函数
 require("rectangle")       -- 窗口管理核心（半屏/全屏/居中/四角等）

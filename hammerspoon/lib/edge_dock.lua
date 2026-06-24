@@ -461,16 +461,22 @@ function EdgeDock.saveState()
         if (not win or not win:isStandard()) and slot.appName then
             local app = hs.application.get(slot.appName)
             if app then
-                for _, w in ipairs(app:allWindows()) do
-                    if w:isStandard() then
-                        -- 优先匹配保存的标题
-                        if slot.winTitle and w:title() == slot.winTitle then
-                            win = w
-                            break
-                        end
-                        -- 备选：第一个标准窗口
-                        if not win then
-                            win = w
+                -- 微信特殊处理：避免回退到第一个标准窗口时误选搜索窗口
+                local lowerName = string.lower(slot.appName)
+                if lowerName == "wechat" or lowerName == "weixin" or lowerName == "微信" then
+                    win = pickWeChatMainWindow(app, nil)
+                else
+                    for _, w in ipairs(app:allWindows()) do
+                        if w:isStandard() then
+                            -- 优先匹配保存的标题
+                            if slot.winTitle and w:title() == slot.winTitle then
+                                win = w
+                                break
+                            end
+                            -- 备选：第一个标准窗口
+                            if not win then
+                                win = w
+                            end
                         end
                     end
                 end
@@ -1046,30 +1052,35 @@ function EdgeDock.tryReconnect(slot)
             -- 没有完全匹配，尝试部分匹配（休眠后标题可能变化，如 Weixin -> WeChat）
             print(prefix .. " [RECONNECT] 完全匹配失败，尝试部分匹配 savedTitle=[" .. slot.winTitle .. "]")
             local partialMatches = {}
+            -- 微信搜索窗口等不应被部分匹配误选
+            local searchTitles = { ["WeChat (Window)"] = true, ["搜索"] = true, ["Search"] = true, ["Find"] = true }
             for _, cand in ipairs(candidates) do
-                -- 部分匹配：保存的标题包含在候选标题中，或候选标题包含在保存的标题中
-                -- 或者两者有共同的前缀/子串（至少3个字符）
-                local savedLower = string.lower(slot.winTitle)
-                local candLower = string.lower(cand.title)
-                local isMatch = false
-                
-                -- 互相包含
-                if string.find(candLower, savedLower, 1, true) or 
-                   string.find(savedLower, candLower, 1, true) then
-                    isMatch = true
-                end
-                
-                -- 或者应用名匹配（微信的特殊情况：Weixin/WeChat 都包含 Wei）
-                if not isMatch and slot.appName then
-                    local appLower = string.lower(slot.appName)
-                    if string.find(candLower, appLower, 1, true) or 
-                       string.find(appLower, candLower, 1, true) then
+                -- 跳过已知的搜索/辅助窗口
+                if not searchTitles[cand.title] then
+                    -- 部分匹配：保存的标题包含在候选标题中，或候选标题包含在保存的标题中
+                    -- 或者两者有共同的前缀/子串（至少3个字符）
+                    local savedLower = string.lower(slot.winTitle)
+                    local candLower = string.lower(cand.title)
+                    local isMatch = false
+                    
+                    -- 互相包含
+                    if string.find(candLower, savedLower, 1, true) or 
+                       string.find(savedLower, candLower, 1, true) then
                         isMatch = true
                     end
-                end
-                
-                if isMatch then
-                    table.insert(partialMatches, cand)
+                    
+                    -- 或者应用名匹配（微信的特殊情况：Weixin/WeChat 都包含 Wei）
+                    if not isMatch and slot.appName then
+                        local appLower = string.lower(slot.appName)
+                        if string.find(candLower, appLower, 1, true) or 
+                           string.find(appLower, candLower, 1, true) then
+                            isMatch = true
+                        end
+                    end
+                    
+                    if isMatch then
+                        table.insert(partialMatches, cand)
+                    end
                 end
             end
             
@@ -1104,10 +1115,27 @@ function EdgeDock.tryReconnect(slot)
         slot.winId = newId
         print(prefix .. " [RECONNECT] 最终成功: app=" .. slot.appName .. ", newWinId=" .. tostring(newId))
         return targetWin
-    else
-        print(prefix .. " [RECONNECT] 最终失败: app=" .. slot.appName .. ", savedTitle=" .. tostring(slot.winTitle))
     end
     
+    -- 微信特殊兜底：如果上述匹配都失败，使用主窗口选择 helper 避免连到搜索窗口
+    if slot.appName then
+        local lowerName = string.lower(slot.appName)
+        if lowerName == "wechat" or lowerName == "weixin" or lowerName == "微信" then
+            local app = hs.application.get(slot.appName)
+            if app then
+                local mainWin = pickWeChatMainWindow(app, nil)
+                if mainWin then
+                    local newId = mainWin:id()
+                    slot.win = mainWin
+                    slot.winId = newId
+                    print(prefix .. " [RECONNECT] 微信兜底选择主窗口: title=[" .. (mainWin:title() or "") .. "], newWinId=" .. tostring(newId))
+                    return mainWin
+                end
+            end
+        end
+    end
+    
+    print(prefix .. " [RECONNECT] 最终失败: app=" .. slot.appName .. ", savedTitle=" .. tostring(slot.winTitle))
     return nil
 end
 

@@ -295,6 +295,159 @@ function notify(title, message)
     hs.notify.new({title = title, informativeText = message}):send()
 end
 
+-- ============================================
+-- 微信窗口选择辅助
+-- 微信的搜索/隐藏窗口常被误识别为前台窗口，这里提供主窗口选择逻辑
+-- ============================================
+
+function pickWeChatMainWindow(app, candidateWin)
+    if not app then return candidateWin end
+
+    local appName = app:name() or ""
+    local lowerName = string.lower(appName)
+    if lowerName ~= "wechat" and lowerName ~= "weixin" and lowerName ~= "微信" then
+        return candidateWin
+    end
+
+    local mainTitles = { ["WeChat"] = true, ["Weixin"] = true, ["微信"] = true }
+    local searchTitles = {
+        ["WeChat (Window)"] = true,
+        ["搜索"] = true,
+        ["Search"] = true,
+        ["Find"] = true,
+    }
+
+    -- 判断窗口是否可用：标准窗口、非搜索窗口、且未被 EdgeDock 藏到屏幕外
+    local function isUsableWindow(win)
+        if not win or not win.isStandard or not win:isStandard() then return false end
+        local title = win:title() or ""
+        if searchTitles[title] then return false end
+        local f = win:frame()
+        local screen = win:screen()
+        if screen then
+            local sf = screen:frame()
+            if f.x >= sf.x + sf.w - 10 or f.y >= sf.y + sf.h - 10 then
+                return false
+            end
+        end
+        return true
+    end
+
+    -- 候选窗口本身可用就直接用（保留用户主动聚焦的聊天窗口等）
+    if isUsableWindow(candidateWin) then
+        return candidateWin
+    end
+
+    local ok, allWindows = pcall(function() return app:allWindows() end)
+    if not ok or not allWindows then return candidateWin end
+
+    local bestMain = nil
+    local bestVisible = nil
+    local largest = nil
+
+    for _, win in ipairs(allWindows) do
+        if win:isStandard() then
+            local title = win:title() or ""
+            local f = win:frame()
+            local area = f.w * f.h
+            local screen = win:screen()
+            local hidden = false
+            if screen then
+                local sf = screen:frame()
+                hidden = f.x >= sf.x + sf.w - 10 or f.y >= sf.y + sf.h - 10
+            end
+
+            if not hidden and not searchTitles[title] then
+                if mainTitles[title] then
+                    if not bestMain or area > bestMain.area then
+                        bestMain = { win = win, area = area, title = title }
+                    end
+                else
+                    if not bestVisible or area > bestVisible.area then
+                        bestVisible = { win = win, area = area, title = title }
+                    end
+                end
+            end
+
+            if not largest or area > largest.area then
+                largest = { win = win, area = area, hidden = hidden, search = searchTitles[title], title = title }
+            end
+        end
+    end
+
+    if bestMain then
+        print("[WeChatHelper] 选择主窗口: title=[" .. bestMain.title .. "]")
+        return bestMain.win
+    end
+    if bestVisible then
+        print("[WeChatHelper] 未找到主标题，选择最大可见窗口: title=[" .. bestVisible.title .. "]")
+        return bestVisible.win
+    end
+    if largest then
+        print("[WeChatHelper] 无更好候选，回退到最大窗口: title=[" .. largest.title .. "]")
+        return largest.win
+    end
+
+    return candidateWin
+end
+
+-- ============================================
+-- 修复：hs.window.focusedWindow() 在切换到 Chrome App/PWA 后返回旧窗口的问题
+-- ============================================
+
+local originalFocusedWindow = hs.window.focusedWindow
+
+function hs.window.focusedWindow()
+    local win = originalFocusedWindow()
+    local frontApp = hs.application.frontmostApplication()
+
+    if not frontApp then
+        return win
+    end
+
+    local okFront, frontBundleID = pcall(function() return frontApp:bundleID() end)
+    local isWeChat = okFront and frontBundleID == "com.tencent.xinWeChat"
+
+    -- 如果原函数返回的窗口已经属于最前台应用，直接返回
+    if win then
+        local app = win:application()
+        if app then
+            local ok, bundleID = pcall(function() return app:bundleID() end)
+            if ok and bundleID and frontBundleID and bundleID == frontBundleID then
+                if isWeChat then
+                    local fixed = pickWeChatMainWindow(frontApp, win)
+                    if fixed then return fixed end
+                end
+                return win
+            end
+        end
+    end
+
+    -- 否则直接询问最前台应用的聚焦窗口（对 Chrome App / PWA 更可靠）
+    local ok, appWin = pcall(function() return frontApp:focusedWindow() end)
+    if ok and appWin then
+        if isWeChat then
+            local fixed = pickWeChatMainWindow(frontApp, appWin)
+            if fixed then return fixed end
+        end
+        return appWin
+    end
+
+    -- 备选：最前台应用的主窗口
+    local ok2, mainWin = pcall(function() return frontApp:mainWindow() end)
+    if ok2 and mainWin then
+        if isWeChat then
+            local fixed = pickWeChatMainWindow(frontApp, mainWin)
+            if fixed then return fixed end
+        end
+        return mainWin
+    end
+
+    return win
+end
+
+print("[Config] hs.window.focusedWindow 已补丁：优先使用前台应用的 focusedWindow，并修复微信搜索窗口误识别")
+
 -- 快速设置窗口 frame（无动画，解决 AXEnhancedUserInterface 问题）
 function setWinFrame(win, rect)
     if not win or not win.isStandard or not win:isStandard() then return end

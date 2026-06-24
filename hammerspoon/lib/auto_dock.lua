@@ -47,8 +47,12 @@ EdgeDock.autoDockWatcher = hs.application.watcher.new(function(appName, eventTyp
             return
         end
         
-        -- 使用第一个窗口进行停靠
+        -- 使用第一个窗口进行停靠（微信特殊处理，避免选到搜索/隐藏窗口）
         local win = windows[1]
+        local lowerName = string.lower(appName)
+        if lowerName == "wechat" or lowerName == "weixin" or lowerName == "微信" then
+            win = pickWeChatMainWindow(app, win)
+        end
         
         -- 再次检查槽位是否仍为空（可能被其他操作占用）
         if EdgeDock.slots[targetSlot] then
