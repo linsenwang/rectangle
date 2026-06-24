@@ -310,12 +310,9 @@ function pickWeChatMainWindow(app, candidateWin)
     end
 
     local mainTitles = { ["WeChat"] = true, ["Weixin"] = true, ["微信"] = true }
-    -- 这里只放实际观察到或高概率属于搜索/辅助窗口的标题。
-    -- 因为判断只在前台应用是微信时进行，不会误伤其他应用。
+    -- 只排除实际观察到的搜索/辅助窗口标题，后续观察到新的再加
     local searchTitles = {
-        ["WeChat (Window)"] = true,   -- 实际观察到的搜索窗口标题
-        ["搜索"] = true,                -- 中文搜索窗口
-        ["Search"] = true,              -- 英文搜索窗口
+        ["WeChat (Window)"] = true,   -- 当前实际观察到的搜索窗口标题
     }
 
     -- 判断窗口是否已经在 Edge Dock 槽位里（避免重复钉同一个已隐藏的窗口）
