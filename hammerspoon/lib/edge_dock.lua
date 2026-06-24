@@ -1053,7 +1053,7 @@ function EdgeDock.tryReconnect(slot)
             print(prefix .. " [RECONNECT] 完全匹配失败，尝试部分匹配 savedTitle=[" .. slot.winTitle .. "]")
             local partialMatches = {}
             -- 微信搜索窗口等不应被部分匹配误选
-            local searchTitles = { ["WeChat (Window)"] = true, ["搜索"] = true, ["Search"] = true, ["Find"] = true }
+            local searchTitles = { ["WeChat (Window)"] = true, ["搜索"] = true, ["Search"] = true }
             for _, cand in ipairs(candidates) do
                 -- 跳过已知的搜索/辅助窗口
                 if not searchTitles[cand.title] then
