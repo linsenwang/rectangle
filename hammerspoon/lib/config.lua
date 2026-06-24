@@ -317,23 +317,31 @@ function pickWeChatMainWindow(app, candidateWin)
         ["Find"] = true,
     }
 
-    -- 判断窗口是否可用：标准窗口、非搜索窗口、且未被 EdgeDock 藏到屏幕外
+    -- 判断窗口是否已经在 Edge Dock 槽位里（避免重复钉同一个已隐藏的窗口）
+    local function isDockedWindow(win)
+        if not win or not win.id then return false end
+        local wid = win:id()
+        if not wid then return false end
+        if EdgeDock and EdgeDock.slots then
+            for _, slot in pairs(EdgeDock.slots) do
+                if slot and slot.winId and slot.winId == wid then
+                    return true
+                end
+            end
+        end
+        return false
+    end
+
+    -- 判断窗口是否可用：标准窗口、非搜索窗口、且未被 EdgeDock 占用
     local function isUsableWindow(win)
         if not win or not win.isStandard or not win:isStandard() then return false end
         local title = win:title() or ""
         if searchTitles[title] then return false end
-        local f = win:frame()
-        local screen = win:screen()
-        if screen then
-            local sf = screen:frame()
-            if f.x >= sf.x + sf.w - 10 or f.y >= sf.y + sf.h - 10 then
-                return false
-            end
-        end
+        if isDockedWindow(win) then return false end
         return true
     end
 
-    -- 候选窗口本身可用就直接用（保留用户主动聚焦的聊天窗口等）
+    -- 候选窗口本身可用就直接用（保留用户主动聚焦的聊天窗口/公众号窗口等）
     if isUsableWindow(candidateWin) then
         return candidateWin
     end
@@ -342,35 +350,23 @@ function pickWeChatMainWindow(app, candidateWin)
     if not ok or not allWindows then return candidateWin end
 
     local bestMain = nil
-    local bestVisible = nil
-    local largest = nil
+    local bestOther = nil
 
     for _, win in ipairs(allWindows) do
         if win:isStandard() then
             local title = win:title() or ""
-            local f = win:frame()
-            local area = f.w * f.h
-            local screen = win:screen()
-            local hidden = false
-            if screen then
-                local sf = screen:frame()
-                hidden = f.x >= sf.x + sf.w - 10 or f.y >= sf.y + sf.h - 10
-            end
+            local area = win:frame().w * win:frame().h
 
-            if not hidden and not searchTitles[title] then
+            if not searchTitles[title] and not isDockedWindow(win) then
                 if mainTitles[title] then
                     if not bestMain or area > bestMain.area then
                         bestMain = { win = win, area = area, title = title }
                     end
                 else
-                    if not bestVisible or area > bestVisible.area then
-                        bestVisible = { win = win, area = area, title = title }
+                    if not bestOther or area > bestOther.area then
+                        bestOther = { win = win, area = area, title = title }
                     end
                 end
-            end
-
-            if not largest or area > largest.area then
-                largest = { win = win, area = area, hidden = hidden, search = searchTitles[title], title = title }
             end
         end
     end
@@ -379,13 +375,9 @@ function pickWeChatMainWindow(app, candidateWin)
         print("[WeChatHelper] 选择主窗口: title=[" .. bestMain.title .. "]")
         return bestMain.win
     end
-    if bestVisible then
-        print("[WeChatHelper] 未找到主标题，选择最大可见窗口: title=[" .. bestVisible.title .. "]")
-        return bestVisible.win
-    end
-    if largest then
-        print("[WeChatHelper] 无更好候选，回退到最大窗口: title=[" .. largest.title .. "]")
-        return largest.win
+    if bestOther then
+        print("[WeChatHelper] 未找到主标题，选择最大可用窗口: title=[" .. bestOther.title .. "]")
+        return bestOther.win
     end
 
     return candidateWin
