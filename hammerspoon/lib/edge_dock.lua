@@ -461,9 +461,15 @@ function EdgeDock.saveState()
         if (not win or not win:isStandard()) and slot.appName then
             local app = hs.application.get(slot.appName)
             if app then
-                -- 微信特殊处理：避免回退到第一个标准窗口时误选搜索窗口
                 local lowerName = string.lower(slot.appName)
-                if lowerName == "wechat" or lowerName == "weixin" or lowerName == "微信" then
+                local isWeChatApp = lowerName == "wechat" or lowerName == "weixin" or lowerName == "微信"
+                local mainWeChatTitles = { ["WeChat"] = true, ["Weixin"] = true, ["微信"] = true }
+                local isMainTitle = not slot.winTitle or slot.winTitle == "" or mainWeChatTitles[slot.winTitle]
+
+                -- 微信特殊处理：
+                -- 1. 保存的是主窗口/无标题时，用 helper 避免选到搜索窗口
+                -- 2. 保存的是聊天/小程序窗口时，只按标题精确匹配，不匹配就不更新，避免把槽位“升级”成主窗口
+                if isWeChatApp and isMainTitle then
                     win = pickWeChatMainWindow(app, nil)
                 else
                     for _, w in ipairs(app:allWindows()) do
@@ -473,8 +479,8 @@ function EdgeDock.saveState()
                                 win = w
                                 break
                             end
-                            -- 备选：第一个标准窗口
-                            if not win then
+                            -- 非微信：备选第一个标准窗口
+                            if not win and not isWeChatApp then
                                 win = w
                             end
                         end
@@ -1117,20 +1123,27 @@ function EdgeDock.tryReconnect(slot)
         return targetWin
     end
     
-    -- 微信特殊兜底：如果上述匹配都失败，使用主窗口选择 helper 避免连到搜索窗口
+    -- 微信特殊兜底：如果上述匹配都失败且保存的是主窗口（或无标题），使用主窗口选择 helper 避免连到搜索窗口
+    -- 注意：如果保存的是某个聊天/小程序窗口，说明原窗口已关闭，不应回退到主窗口
     if slot.appName then
         local lowerName = string.lower(slot.appName)
         if lowerName == "wechat" or lowerName == "weixin" or lowerName == "微信" then
-            local app = hs.application.get(slot.appName)
-            if app then
-                local mainWin = pickWeChatMainWindow(app, nil)
-                if mainWin then
-                    local newId = mainWin:id()
-                    slot.win = mainWin
-                    slot.winId = newId
-                    print(prefix .. " [RECONNECT] 微信兜底选择主窗口: title=[" .. (mainWin:title() or "") .. "], newWinId=" .. tostring(newId))
-                    return mainWin
+            local mainWeChatTitles = { ["WeChat"] = true, ["Weixin"] = true, ["微信"] = true }
+            local isMainTitle = not slot.winTitle or slot.winTitle == "" or mainWeChatTitles[slot.winTitle]
+            if isMainTitle then
+                local app = hs.application.get(slot.appName)
+                if app then
+                    local mainWin = pickWeChatMainWindow(app, nil)
+                    if mainWin then
+                        local newId = mainWin:id()
+                        slot.win = mainWin
+                        slot.winId = newId
+                        print(prefix .. " [RECONNECT] 微信兜底选择主窗口: title=[" .. (mainWin:title() or "") .. "], newWinId=" .. tostring(newId))
+                        return mainWin
+                    end
                 end
+            else
+                print(prefix .. " [RECONNECT] 微信非主窗口已关闭，不兜底到主窗口: savedTitle=[" .. tostring(slot.winTitle) .. "]")
             end
         end
     end
@@ -1722,6 +1735,18 @@ function EdgeDock.start()
                 -- 应用还在运行，使用 validateSlot 进行验证
                 local validSlot = EdgeDock.validateSlot(i)
                 if not validSlot then
+                    -- 微信非主窗口（小程序/某个聊天窗口等）关闭后不会再恢复，直接释放槽位
+                    local slotAppName = slot.appName or ""
+                    local slotAppLower = string.lower(slotAppName)
+                    local isWeChatSlot = slotAppLower == "wechat" or slotAppLower == "weixin" or slotAppLower == "微信"
+                    local mainWeChatTitles = { ["WeChat"] = true, ["Weixin"] = true, ["微信"] = true }
+                    if isWeChatSlot and slot.winTitle and slot.winTitle ~= "" and not mainWeChatTitles[slot.winTitle] then
+                        print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (WeChat 非主窗口 title=[" .. slot.winTitle .. "]) 已关闭，清理槽位")
+                        EdgeDock.slots[i] = nil
+                        changed = true
+                        goto continue_slot
+                    end
+
                     -- 验证失败，检查是否是窗口异常状态（如 winId=0 或窗口非标准）
                     -- 如果是异常状态，不增加失败计数，等待窗口恢复
                     local isAbnormalState = false
