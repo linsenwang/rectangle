@@ -1152,6 +1152,55 @@ function EdgeDock.tryReconnect(slot)
     return nil
 end
 
+-- 安全清理槽位：如果窗口仍存在，先恢复原位置，避免遗落在角落
+function EdgeDock.clearSlot(slotIndex)
+    local slot = EdgeDock.slots[slotIndex]
+    if not slot then return end
+
+    local prefix = EdgeDock.logPrefix()
+    local win = slot.win
+
+    -- 尝试通过 winId 重新获取
+    if not win and slot.winId and slot.winId ~= 0 and slot.winId ~= -1 then
+        win = hs.window.get(slot.winId)
+    end
+
+    -- 对于 WeChat 等应用，尝试通过标题再找找
+    if not win and slot.appName and slot.winTitle and slot.winTitle ~= "" then
+        local app = hs.application.get(slot.appName)
+        if not app then
+            local bundleMap = {
+                ["WeChat"] = "com.tencent.xinWeChat",
+                ["Music"] = "com.apple.Music",
+                ["ChatGPT"] = "com.openai.chat",
+                ["Safari"] = "com.apple.Safari",
+                ["Chrome"] = "com.google.Chrome",
+            }
+            local bundleID = bundleMap[slot.appName]
+            if bundleID then
+                app = hs.application.get(bundleID)
+            end
+        end
+        if app and type(app.allWindows) == "function" then
+            for _, w in ipairs(app:allWindows()) do
+                if w:title() == slot.winTitle then
+                    win = w
+                    break
+                end
+            end
+        end
+    end
+
+    if win and slot.originalFrame then
+        print(prefix .. " [CLEAR_SLOT] 槽位 " .. slotIndex .. " (" .. (slot.appName or "unknown") .. ") 窗口仍存在，恢复到原位置")
+        setWinFrame(win, slot.originalFrame)
+    else
+        print(prefix .. " [CLEAR_SLOT] 槽位 " .. slotIndex .. " (" .. (slot.appName or "unknown") .. ") 窗口已不存在，直接清理")
+    end
+
+    EdgeDock.slots[slotIndex] = nil
+end
+
 -- 检查窗口是否处于居中状态
 function EdgeDock.isWindowCentered(win, screen)
     if not win then return false end
@@ -1475,7 +1524,7 @@ EdgeDock.appWatcher = hs.application.watcher.new(function(appName, eventType, ap
                         local validSlot = EdgeDock.validateSlot(i)
                         if not validSlot then
                             print(prefix .. " [APP_WATCHER] 槽位 " .. i .. " 确认关闭，清理槽位")
-                            EdgeDock.slots[i] = nil
+                            EdgeDock.clearSlot(i)
                             changed = true
                         else
                             print(prefix .. " [APP_WATCHER] 槽位 " .. i .. " 验证通过（可能是误报）")
@@ -1536,15 +1585,23 @@ EdgeDock.caffeinateWatcher = hs.caffeinate.watcher.new(function(eventType)
                     if validSlot then
                         reconnectedCount = reconnectedCount + 1
                         print(prefix .. " [CAFFEINATE] 槽位 " .. i .. " 验证成功，新winId=" .. tostring(validSlot.winId))
+                        if slot.failCount and slot.failCount > 0 then
+                            print(prefix .. " [CAFFEINATE] 槽位 " .. i .. " 验证恢复，重置失败计数")
+                            slot.failCount = 0
+                        end
                         -- 确保窗口还在隐藏位置
                         if slot.isShowing then
                             print(prefix .. " [CAFFEINATE] 槽位 " .. i .. " 之前在显示状态，重新隐藏")
                             EdgeDock.hideWindow(i)
                         end
                     else
-                        print(prefix .. " [CAFFEINATE] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 无法重新连接，将被清理")
+                        slot.failCount = (slot.failCount or 0) + 1
+                        print(prefix .. " [CAFFEINATE] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 无法重新连接，失败次数=" .. slot.failCount)
                         table.insert(failedSlots, i .. "(" .. (slot.appName or "?") .. ")")
-                        EdgeDock.slots[i] = nil
+                        if slot.failCount >= 2 then
+                            print(prefix .. " [CAFFEINATE] 槽位 " .. i .. " 连续2次唤醒验证失败，清理槽位")
+                            EdgeDock.clearSlot(i)
+                        end
                     end
                 else
                     print(prefix .. " [CAFFEINATE] 槽位 " .. i .. " 为空，跳过")
@@ -1727,7 +1784,7 @@ function EdgeDock.start()
                 if not app then
                     -- 应用确实已关闭，直接清理槽位
                     print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 应用已关闭，清理槽位")
-                    EdgeDock.slots[i] = nil
+                    EdgeDock.clearSlot(i)
                     changed = true
                     goto continue_slot
                 end
@@ -1735,18 +1792,6 @@ function EdgeDock.start()
                 -- 应用还在运行，使用 validateSlot 进行验证
                 local validSlot = EdgeDock.validateSlot(i)
                 if not validSlot then
-                    -- 微信非主窗口（小程序/某个聊天窗口等）关闭后不会再恢复，直接释放槽位
-                    local slotAppName = slot.appName or ""
-                    local slotAppLower = string.lower(slotAppName)
-                    local isWeChatSlot = slotAppLower == "wechat" or slotAppLower == "weixin" or slotAppLower == "微信"
-                    local mainWeChatTitles = { ["WeChat"] = true, ["Weixin"] = true, ["微信"] = true }
-                    if isWeChatSlot and slot.winTitle and slot.winTitle ~= "" and not mainWeChatTitles[slot.winTitle] then
-                        print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (WeChat 非主窗口 title=[" .. slot.winTitle .. "]) 已关闭，清理槽位")
-                        EdgeDock.slots[i] = nil
-                        changed = true
-                        goto continue_slot
-                    end
-
                     -- 验证失败，检查是否是窗口异常状态（如 winId=0 或窗口非标准）
                     -- 如果是异常状态，不增加失败计数，等待窗口恢复
                     local isAbnormalState = false
@@ -1781,7 +1826,7 @@ function EdgeDock.start()
                         -- 连续 3 次失败才清理（给窗口恢复留出时间）
                         if slot.failCount >= 3 then
                             print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 连续3次验证失败，清理槽位")
-                            EdgeDock.slots[i] = nil
+                            EdgeDock.clearSlot(i)
                             changed = true
                         end
                     end
