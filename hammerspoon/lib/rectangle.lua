@@ -377,23 +377,53 @@ end)
 
 local resizeStep = 50
 
+-- 智能调整窗口宽度：
+-- - 居中窗口：左右对称伸缩，总步长仍为 resizeStep
+-- - 贴右边缘：向左伸缩，保持右边缘对齐
+-- - 其他（默认/左边缘）：向右伸缩，保持左边缘对齐
+local function resizeWidth(win, delta)
+    local frame = win:frame()
+    local max = getWinScreen(win)
+    local area = getUsableArea(max, win)
+
+    local centerX = area.x + (area.w - frame.w) / 2
+    local isCentered = approx(frame.x, centerX, 20)
+    local isRightEdge = approx(frame.x + frame.w, area.x + area.w, 20) or
+                        approx(frame.x + frame.w, max.x + max.w, 20)
+
+    local newW
+    if delta > 0 then
+        newW = math.min(frame.w + delta, area.w)
+    else
+        newW = math.max(frame.w + delta, 200)
+    end
+    local actualDelta = newW - frame.w
+
+    local newX
+    if isCentered then
+        newX = frame.x - actualDelta / 2
+    elseif isRightEdge then
+        newX = frame.x - actualDelta
+    else
+        newX = frame.x
+    end
+
+    -- 确保不超出可用区域
+    newX = math.max(area.x, math.min(newX, area.x + area.w - newW))
+
+    setWinFrame(win, hs.geometry.rect(newX, frame.y, newW, frame.h))
+end
+
 hs.hotkey.bind(mash, "=", function()
     local win = hs.window.focusedWindow()
     if not win then return end
-    local frame = win:frame()
-    local max = getWinScreen(win)
-    local newW = math.min(frame.w + resizeStep, max.w)
-    local newH = math.min(frame.h + resizeStep, max.h)
-    setWinFrame(win, hs.geometry.rect(frame.x, frame.y, newW, newH))
+    resizeWidth(win, resizeStep)
 end)
 
 hs.hotkey.bind(mash, "-", function()
     local win = hs.window.focusedWindow()
     if not win then return end
-    local frame = win:frame()
-    local newW = math.max(frame.w - resizeStep, 200)
-    local newH = math.max(frame.h - resizeStep, 200)
-    setWinFrame(win, hs.geometry.rect(frame.x, frame.y, newW, newH))
+    resizeWidth(win, -resizeStep)
 end)
 
 -- ============================================
@@ -720,3 +750,116 @@ local screenChangeWatcher = hs.screen.watcher.new(function()
     end)
 end)
 screenChangeWatcher:start()
+
+-- ============================================
+-- 与上一个焦点窗口交换位置
+-- ============================================
+
+local previousFocusedWindow = nil
+local currentFocusedWindow = nil
+
+-- 监听焦点变化，记录上一个焦点窗口
+local swapFilter = hs.window.filter.new(true)
+swapFilter:subscribe(hs.window.filter.windowFocused, function(win)
+    if win and win ~= currentFocusedWindow then
+        previousFocusedWindow = currentFocusedWindow
+        currentFocusedWindow = win
+    end
+end)
+
+local function swapWithPreviousWindow()
+    local win = hs.window.focusedWindow()
+    if not win then
+        hs.alert.show("没有当前窗口", 1)
+        return
+    end
+
+    local prev = previousFocusedWindow
+    local ok, isPrevValid = pcall(function()
+        return prev and prev:isStandard()
+    end)
+    if not ok or not isPrevValid then
+        hs.alert.show("没有上一个焦点窗口", 1)
+        return
+    end
+
+    if prev:id() == win:id() then
+        hs.alert.show("没有可交换的窗口", 1)
+        return
+    end
+
+    -- 保存状态以便还原
+    saveWindowState(win)
+    saveWindowState(prev)
+
+    local frame1 = win:frame()
+    local frame2 = prev:frame()
+
+    -- 只在同一屏幕内交换，避免跨屏幕坐标混乱
+    local screen1 = win:screen()
+    local screen2 = prev:screen()
+    if not screen1 or not screen2 or screen1:id() ~= screen2:id() then
+        hs.alert.show("窗口不在同一屏幕，无法交换", 1)
+        return
+    end
+
+    -- 检测窗口的水平对齐方式（左/右/居中/浮动），交换时保持对齐语义
+    local function getAnchor(win0, frame)
+        local max0 = getWinScreen(win0)
+        local area0 = getUsableArea(max0, win0)
+        local centerLine = area0.x + area0.w / 2
+        if approx(frame.x, area0.x, 20) or approx(frame.x, max0.x, 20) then
+            return { type = "left", ref = frame.x }
+        elseif approx(frame.x + frame.w, area0.x + area0.w, 20) or
+               approx(frame.x + frame.w, max0.x + max0.w, 20) then
+            return { type = "right", ref = frame.x + frame.w }
+        elseif approx(frame.x + frame.w / 2, centerLine, 20) then
+            return { type = "center", ref = centerLine }
+        else
+            return { type = "float", ref = frame.x }
+        end
+    end
+
+    local function applyAnchor(frame, anchor)
+        if anchor.type == "left" then
+            return anchor.ref
+        elseif anchor.type == "right" then
+            return anchor.ref - frame.w
+        elseif anchor.type == "center" then
+            return anchor.ref - frame.w / 2
+        else
+            return anchor.ref
+        end
+    end
+
+    local anchor1 = getAnchor(win, frame1)
+    local anchor2 = getAnchor(prev, frame2)
+
+    local newX1 = applyAnchor({ w = frame1.w, h = frame1.h }, anchor2)
+    local newX2 = applyAnchor({ w = frame2.w, h = frame2.h }, anchor1)
+
+    -- 确保不超出可用区域
+    local max = getWinScreen(win)
+    local area = getUsableArea(max, win)
+    newX1 = math.max(area.x, math.min(newX1, area.x + area.w - frame1.w))
+    newX2 = math.max(area.x, math.min(newX2, area.x + area.w - frame2.w))
+
+    -- 只交换位置（x, y），各自保留原大小（w, h）
+    local newFrame1 = hs.geometry.rect(newX1, frame2.y, frame1.w, frame1.h)
+    local newFrame2 = hs.geometry.rect(newX2, frame1.y, frame2.w, frame2.h)
+    setWinFrame(win, newFrame1)
+    setWinFrame(prev, newFrame2)
+
+    -- 交换后，让现在处于居中位置的窗口获得焦点
+    local centerLine = area.x + area.w / 2
+    local isWinCentered = approx(newFrame1.x + newFrame1.w / 2, centerLine, 20)
+    local isPrevCentered = approx(newFrame2.x + newFrame2.w / 2, centerLine, 20)
+    if isWinCentered then
+        win:focus()
+    elseif isPrevCentered then
+        prev:focus()
+    end
+end
+
+-- Ctrl+Option + X：与上一个焦点窗口交换位置
+hs.hotkey.bind(mash, "x", swapWithPreviousWindow)
