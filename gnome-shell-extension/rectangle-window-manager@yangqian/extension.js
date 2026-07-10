@@ -14,9 +14,9 @@ const SHORTCUTS = [
     { name: 'left-half', handler: 'leftHalf' },
     { name: 'right-half', handler: 'rightHalf' },
     { name: 'top-half', handler: 'topHalf' },
-    { name: 'maximize', handler: 'maximize' },
-    { name: 'restore-window', handler: 'restore' },
-    { name: 'center-window', handler: 'center' },
+    { name: 'rect-maximize', handler: 'maximize' },
+    { name: 'rect-restore-window', handler: 'restore' },
+    { name: 'rect-center-window', handler: 'center' },
     { name: 'almost-maximize', handler: 'almostMaximize' },
     { name: 'snap-left', handler: 'snapLeft' },
     { name: 'snap-right', handler: 'snapRight' },
@@ -46,21 +46,30 @@ export default class RectangleExtension extends Extension {
         // 禁用与本扩展冲突的系统工作区切换快捷键
         this._disableConflictingKeybindings();
 
-        // 注册快捷键
+        // 注册快捷键：先强制移除可能残留的同名绑定，避免 reload 时绑定到旧 handler
         for (const shortcut of SHORTCUTS) {
-            Main.wm.addKeybinding(
-                shortcut.name,
-                this._settings,
-                Meta.KeyBindingFlags.IGNORE_AUTOREPEAT,
-                Shell.ActionMode.NORMAL,
-                () => {
-                    try {
-                        this._manager[shortcut.handler]();
-                    } catch (e) {
-                        logError(e, `RectangleWM: ${shortcut.name}`);
+            Main.wm.removeKeybinding(shortcut.name);
+            try {
+                Main.wm.addKeybinding(
+                    shortcut.name,
+                    this._settings,
+                    Meta.KeyBindingFlags.IGNORE_AUTOREPEAT,
+                    Shell.ActionMode.ALL,
+                    () => {
+                        const win = global.display.focus_window;
+                        const wmClass = win ? win.get_wm_class() : 'null';
+                        console.log(`RECTWM: ${shortcut.name} triggered, focus=${wmClass}`);
+                        try {
+                            this._manager[shortcut.handler]();
+                        } catch (e) {
+                            logError(e, `RectangleWM: ${shortcut.name}`);
+                        }
                     }
-                }
-            );
+                );
+                console.log(`RECTWM: registered ${shortcut.name}`);
+            } catch (e) {
+                console.log(`RECTWM: FAILED to register ${shortcut.name}: ${e}`);
+            }
         }
 
         // 监听焦点变化，用于窗口交换

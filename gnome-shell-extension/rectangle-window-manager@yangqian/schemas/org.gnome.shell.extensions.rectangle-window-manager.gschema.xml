@@ -18,17 +18,17 @@
       <summary>上半屏</summary>
     </key>
 
-    <key name="maximize" type="as">
+    <key name="rect-maximize" type="as">
       <default><![CDATA[["<Control><Alt>Return"]]]></default>
       <summary>最大化（带边距）</summary>
     </key>
 
-    <key name="restore-window" type="as">
+    <key name="rect-restore-window" type="as">
       <default><![CDATA[["<Control><Alt>BackSpace"]]]></default>
       <summary>还原窗口</summary>
     </key>
 
-    <key name="center-window" type="as">
+    <key name="rect-center-window" type="as">
       <default><![CDATA[["<Control><Alt>c"]]]></default>
       <summary>窗口居中</summary>
     </key>

@@ -45,14 +45,23 @@ export default class RectangleManager {
      */
     setFrame(window, x, y, width, height) {
         if (!window) return;
-        if (!window.allows_resize() || !window.allows_move()) return;
+
+        const wmClass = window.get_wm_class() || 'unknown';
+        const maximized = window.get_maximized();
+        console.log(`RECTWM setFrame: class=${wmClass} target=${x},${y} ${width}x${height} maximized=${maximized}`);
 
         // 如果窗口已最大化，先取消最大化
-        if (window.is_maximized()) {
-            window.unmaximize();
+        if (maximized > 0) {
+            window.unmaximize(Meta.MaximizeFlags.BOTH);
         }
 
-        window.move_resize_frame(false, x, y, width, height);
+        try {
+            // user_op=true 让 Mutter 把 resize 当作用户操作，部分 Wayland 客户端（Chrome、Settings）只响应用户发起的 resize
+            window.move_resize_frame(true, x, y, width, height);
+            console.log(`RECTWM setFrame: move_resize_frame ok for ${wmClass}`);
+        } catch (e) {
+            console.log(`RECTWM setFrame: move_resize_frame FAILED for ${wmClass}: ${e}`);
+        }
     }
 
     saveWindowState(window) {
@@ -111,7 +120,7 @@ export default class RectangleManager {
             width = usableW * 0.5;
         }
 
-        this.setFrame(window, workArea.x + m.left, area.y, width, area.height);
+        this.setFrame(window, workArea.x + m.left, area.y, Math.round(width), area.height);
     }
 
     rightHalf() {
@@ -152,8 +161,8 @@ export default class RectangleManager {
             width = usableW * 0.5;
         }
 
-        const x = rightEdge - width;
-        this.setFrame(window, x, area.y, width, area.height);
+        const x = Math.round(rightEdge - width);
+        this.setFrame(window, x, area.y, Math.round(width), area.height);
     }
 
     // ==========================
