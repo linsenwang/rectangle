@@ -2,7 +2,51 @@
 
 一个功能丰富的 macOS 窗口管理配置，基于 Hammerspoon 实现，灵感来源于 Rectangle Pro。
 
-## 安装
+## Linux / GNOME 迁移
+
+本项目已在 Ubuntu 26.04 / GNOME 50.1 / Wayland 下迁移了核心窗口管理功能，以 GNOME Shell 扩展形式提供。
+
+### 已迁移功能
+
+- 左/右半屏循环（1/2 → 2/3 → 5/6）
+- 上半屏、最大化（带边距）、居中、还原
+- 四角 1/4 定位
+- 左/右 1/3 循环
+- 窗口宽度增大/缩小
+- 最大化高度、跨显示器移动
+- 窗口微调移动（Super + Alt + 方向键）
+- 与上一个焦点窗口交换位置
+- 应用/显示器特定边距配置
+
+### 未迁移功能
+
+- Edge Dock
+- 窗口平铺
+- 显示器布局记忆
+- 自动停靠
+- CapsWriter
+- Shottr 截图
+
+### 安装 GNOME 扩展
+
+扩展源码在 `gnome-shell-extension/rectangle-window-manager@yangqian/`。
+
+```bash
+# 安装到 GNOME 扩展目录
+cp -r gnome-shell-extension/rectangle-window-manager@yangqian \
+    ~/.local/share/gnome-shell/extensions/
+
+# 注销并重新登录 GNOME 后启用扩展
+gnome-extensions enable rectangle-window-manager@yangqian
+```
+
+注意：
+- 扩展会自动禁用冲突的系统工作区切换快捷键（`Ctrl+Alt+方向键`），卸载时恢复。
+- 如需修改边距或快捷键，编辑扩展目录下的 `config.js` 或使用 `gsettings` / `dconf-editor`。
+
+---
+
+## macOS 安装
 
 1. 安装 [Hammerspoon](https://www.hammerspoon.org/)
 2. 将 `hammerspoon/init.lua` 复制到 `~/.hammerspoon/`

@@ -1,0 +1,10 @@
+{
+  "name": "Rectangle Window Manager",
+  "description": "Rectangle-style window management for GNOME Shell",
+  "uuid": "rectangle-window-manager@yangqian",
+  "settings-schema": "org.gnome.shell.extensions.rectangle-window-manager",
+  "shell-version": [
+    "50"
+  ],
+  "version": 1
+}
