@@ -4,6 +4,7 @@
   "uuid": "rectangle-window-manager@yangqian",
   "settings-schema": "org.gnome.shell.extensions.rectangle-window-manager",
   "shell-version": [
+    "46",
     "50"
   ],
   "version": 1

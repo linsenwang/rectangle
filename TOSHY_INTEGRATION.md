@@ -80,6 +80,10 @@ keymap("User hardware keys", {
     C("Super-Alt-C"):           C("C-Alt-C"),
     C("Super-Alt-Enter"):       C("C-Alt-Enter"),
     C("Super-Alt-Backspace"):   C("C-Alt-Backspace"),
+    C("Super-Alt-Comma"):       C("C-Alt-Comma"),
+    C("Super-Alt-Dot"):         C("C-Alt-Dot"),
+    C("Super-Alt-Semicolon"):   C("C-Alt-Semicolon"),
+    C("Super-Alt-Apostrophe"):  C("C-Alt-Apostrophe"),
 
 }, when = lambda ctx:
     cnfg.screen_has_focus and
@@ -98,6 +102,10 @@ Toshy 的 `OptSpecialChars - ABC` 和 `OptSpecialChars - US` 键位表会把 `Al
 ```python
 C("Alt-C"):                 UC(0x00E7),                     # ç Small Letter c with Cedilla
 C("Super-Alt-C"):           C("C-Alt-C"),                   # Override for Rectangle Window Manager center shortcut
+C("Super-Alt-Comma"):       C("C-Alt-Comma"),               # Override for Rectangle left 1/3 shortcut
+C("Super-Alt-Dot"):         C("C-Alt-Dot"),                 # Override for Rectangle right 1/3 shortcut
+C("Super-Alt-Semicolon"):   C("C-Alt-Semicolon"),           # Override for Rectangle snap-left shortcut
+C("Super-Alt-Apostrophe"):  C("C-Alt-Apostrophe"),          # Override for Rectangle snap-right shortcut
 ```
 
 ## 重启与验证
@@ -121,6 +129,10 @@ toshy-services-restart
 - `Ctrl+Alt+c`：居中
 - `Ctrl+Alt+Enter`：最大化
 - `Ctrl+Alt+Backspace`：还原
+- `Ctrl+Alt+,`：左 1/3
+- `Ctrl+Alt+.`：右 1/3
+- `Ctrl+Alt+;`：靠最左
+- `Ctrl+Alt+'`：靠最右
 
 如果还有问题，打开 Toshy 调试：
 
