@@ -10,7 +10,6 @@ export default class RectangleManager {
     constructor() {
         this.windowHistory = {};
         this.cycleState = {};
-        this.thirdCycleState = {};
         this.previousFocusedWindow = null;
         this.currentFocusedWindow = null;
     }
@@ -18,7 +17,6 @@ export default class RectangleManager {
     destroy() {
         this.windowHistory = {};
         this.cycleState = {};
-        this.thirdCycleState = {};
     }
 
     // ==========================
@@ -293,7 +291,7 @@ export default class RectangleManager {
     }
 
     // ==========================
-    // 三分之一循环
+    // 左/右 1/3（不循环）
     // ==========================
 
     leftThird() {
@@ -301,27 +299,11 @@ export default class RectangleManager {
         if (!window) return;
         this.saveWindowState(window);
 
-        const id = window.get_id();
         const area = this.getUsable(window);
-        const frame = window.get_frame_rect();
         const m = getAppMargin(window);
         const thirdW = Math.floor((area.width - m.inner * 2) / 3);
 
-        const isLeftSide = approx(frame.x, area.x, 10);
-        const isThirdWidth = approx(frame.width, thirdW, 30);
-
-        let x, state;
-        if (isLeftSide && isThirdWidth) {
-            state = (this.thirdCycleState[id] || 0) + 1;
-            if (state > 3) state = 1;
-            this.thirdCycleState[id] = state;
-        } else {
-            state = 1;
-            this.thirdCycleState[id] = 1;
-        }
-
-        x = area.x + (thirdW + m.inner) * (state - 1);
-        this.setFrame(window, x, area.y, thirdW, area.height);
+        this.setFrame(window, area.x, area.y, thirdW, area.height);
     }
 
     rightThird() {
@@ -329,27 +311,11 @@ export default class RectangleManager {
         if (!window) return;
         this.saveWindowState(window);
 
-        const id = window.get_id();
         const area = this.getUsable(window);
-        const frame = window.get_frame_rect();
         const m = getAppMargin(window);
         const thirdW = Math.floor((area.width - m.inner * 2) / 3);
-        const rightEdge = area.x + area.width;
+        const x = area.x + (thirdW + m.inner) * 2;
 
-        const isRightSide = approx(frame.x + frame.width, rightEdge, 10);
-        const isThirdWidth = approx(frame.width, thirdW, 30);
-
-        let state;
-        if (isRightSide && isThirdWidth) {
-            state = (this.thirdCycleState[id] || 4) - 1;
-            if (state < 1) state = 3;
-            this.thirdCycleState[id] = state;
-        } else {
-            state = 3;
-            this.thirdCycleState[id] = 3;
-        }
-
-        const x = area.x + (thirdW + m.inner) * (state - 1);
         this.setFrame(window, x, area.y, thirdW, area.height);
     }
 
