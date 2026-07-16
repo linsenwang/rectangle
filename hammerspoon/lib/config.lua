@@ -385,13 +385,27 @@ end
 -- 修复：hs.window.focusedWindow() 在切换到 Chrome App/PWA 后返回旧窗口的问题
 -- ============================================
 
-local originalFocusedWindow = hs.window.focusedWindow
+-- 把原始引用存入独立全局，重载时判重，避免逐层嵌套
+if not _G._hsWindowFocusedWindowOriginal then
+    _G._hsWindowFocusedWindowOriginal = hs.window.focusedWindow
+end
+local originalFocusedWindow = _G._hsWindowFocusedWindowOriginal
+
+-- 短 TTL 缓存：高频调用路径上避免重复 frontmost AX 查询
+_G._hsFocusedWindowCache = _G._hsFocusedWindowCache or { time = 0, result = nil }
 
 function hs.window.focusedWindow()
+    local now = hs.timer.secondsSinceEpoch()
+    if now - _G._hsFocusedWindowCache.time < 0.05 then
+        return _G._hsFocusedWindowCache.result
+    end
+
     local win = originalFocusedWindow()
     local frontApp = hs.application.frontmostApplication()
 
     if not frontApp then
+        _G._hsFocusedWindowCache.time = now
+        _G._hsFocusedWindowCache.result = win
         return win
     end
 
@@ -406,8 +420,14 @@ function hs.window.focusedWindow()
             if ok and bundleID and frontBundleID and bundleID == frontBundleID then
                 if isWeChat then
                     local fixed = pickWeChatMainWindow(frontApp, win)
-                    if fixed then return fixed end
+                    if fixed then
+                        _G._hsFocusedWindowCache.time = now
+                        _G._hsFocusedWindowCache.result = fixed
+                        return fixed
+                    end
                 end
+                _G._hsFocusedWindowCache.time = now
+                _G._hsFocusedWindowCache.result = win
                 return win
             end
         end
@@ -418,8 +438,14 @@ function hs.window.focusedWindow()
     if ok and appWin then
         if isWeChat then
             local fixed = pickWeChatMainWindow(frontApp, appWin)
-            if fixed then return fixed end
+            if fixed then
+                _G._hsFocusedWindowCache.time = now
+                _G._hsFocusedWindowCache.result = fixed
+                return fixed
+            end
         end
+        _G._hsFocusedWindowCache.time = now
+        _G._hsFocusedWindowCache.result = appWin
         return appWin
     end
 
@@ -428,11 +454,19 @@ function hs.window.focusedWindow()
     if ok2 and mainWin then
         if isWeChat then
             local fixed = pickWeChatMainWindow(frontApp, mainWin)
-            if fixed then return fixed end
+            if fixed then
+                _G._hsFocusedWindowCache.time = now
+                _G._hsFocusedWindowCache.result = fixed
+                return fixed
+            end
         end
+        _G._hsFocusedWindowCache.time = now
+        _G._hsFocusedWindowCache.result = mainWin
         return mainWin
     end
 
+    _G._hsFocusedWindowCache.time = now
+    _G._hsFocusedWindowCache.result = win
     return win
 end
 

@@ -15,19 +15,13 @@ EdgeDock = {
 EdgeDock.appColorCache = {}
 
 -- 检测当前外观模式（深色/浅色）
+-- 使用原生 API，避免每次 fork shell
 function EdgeDock.getAppearanceMode()
-    local success, result = pcall(function()
-        local handle = io.popen("defaults read -g AppleInterfaceStyle 2>/dev/null")
-        if handle then
-            local output = handle:read("*a")
-            handle:close()
-            if output and output:match("Dark") then
-                return "dark"
-            end
-        end
-        return "light"
-    end)
-    return success and result or "light"
+    local ok, style = pcall(hs.host.interfaceStyle)
+    if ok and style then
+        return string.lower(style)
+    end
+    return "light"
 end
 
 -- 获取当前模式的颜色配置
@@ -142,6 +136,27 @@ function EdgeDock.getCurrentScreen()
     return screen:frame()
 end
 
+-- 根据 screenId 查找屏幕对象
+function EdgeDock.getScreenById(screenId)
+    for _, s in ipairs(hs.screen.allScreens()) do
+        if s:id() == screenId then
+            return s
+        end
+    end
+    return nil
+end
+
+-- 获取槽位绑定的屏幕 frame（优先使用槽位记录的 screenId，避免跟随鼠标切屏）
+function EdgeDock.getSlotScreenFrame(slot)
+    if slot and slot.screenId then
+        local screen = EdgeDock.getScreenById(slot.screenId)
+        if screen then
+            return screen:frame()
+        end
+    end
+    return EdgeDock.getCurrentScreen()
+end
+
 -- 计算小条高度（根据屏幕高度自动分配）
 function EdgeDock.getBarHeight(screenFrame)
     local screen = screenFrame or EdgeDock.getCurrentScreen()
@@ -169,13 +184,13 @@ function EdgeDock.isPointInSlot(x, y, slotIndex)
 end
 
 -- 检查点是否在窗口区域内（用于检测鼠标是否离开窗口）
+-- 优先使用 peek 时缓存的 lastWinFrame，避免高频 AX 调用
 function EdgeDock.isPointInWindow(mouseX, mouseY, win, slot)
     local frame = nil
-    if win then
-        frame = win:frame()
-    elseif slot and slot.lastWinFrame then
-        -- 使用缓存的 frame
+    if slot and slot.lastWinFrame then
         frame = slot.lastWinFrame
+    elseif win then
+        frame = win:frame()
     end
     if not frame then return false end
     return mouseX >= frame.x and mouseX <= frame.x + frame.w
@@ -587,155 +602,173 @@ function EdgeDock.restoreState()
         EdgeDock._startupComplete = true
         
         local restoredCount = 0
-        
-        for _, item in ipairs(state) do
+
+        local function finishRestore()
+            print(prefix .. " [RESTORE_STATE] 恢复完成: " .. restoredCount .. "/" .. #state .. " 个窗口已恢复")
+            -- 刷新小条显示
+            EdgeDock.refreshBars()
+            if restoredCount > 0 then
+                notify("Edge Dock", "已恢复 " .. restoredCount .. " 个窗口")
+            end
+        end
+
+        local function processItem(idx)
+            local item = state[idx]
+            if not item then
+                finishRestore()
+                return
+            end
+
             -- 查找应用
             print(prefix .. " [RESTORE_STATE] 处理槽位 " .. item.slotIndex .. ": app=" .. item.appName .. ", savedWinId=" .. tostring(item.winId) .. ", savedTitle=[" .. tostring(item.winTitle) .. "]")
+
+            local function doRestore(app)
+                -- 安全检查：确保 app 是有效的应用对象且有 allWindows 方法
+                if app and type(app.allWindows) == "function" then
+                    -- 查找匹配的窗口
+                    local targetWin = nil
+                    local windows = app:allWindows()
+                    local candidates = {}
+
+                    -- 收集所有标准窗口
+                    for _, win in ipairs(windows) do
+                        if win:isStandard() then
+                            table.insert(candidates, {
+                                win = win,
+                                title = win:title() or "",
+                                id = win:id()
+                            })
+                        end
+                    end
+
+                    -- 匹配策略1: 优先通过 winId 匹配（如果窗口仍然存在）
+                    if item.winId then
+                        print(prefix .. " [RESTORE_STATE]   尝试winId匹配: " .. tostring(item.winId))
+                        for _, cand in ipairs(candidates) do
+                            print(prefix .. " [RESTORE_STATE]     检查候选: id=" .. tostring(cand.id) .. ", title=[" .. cand.title .. "]")
+                            if cand.id == item.winId then
+                                targetWin = cand.win
+                                print(prefix .. " [RESTORE_STATE]   winId匹配成功: " .. item.appName .. ", id=" .. tostring(item.winId))
+                                break
+                            end
+                        end
+                        if not targetWin then
+                            print(prefix .. " [RESTORE_STATE]   winId匹配失败: 没有候选窗口匹配 " .. tostring(item.winId))
+                        end
+                    end
+
+                    -- 匹配策略2: 通过窗口标题匹配
+                    -- 只在标题唯一时匹配，避免连错窗口
+                    if not targetWin and item.winTitle and item.winTitle ~= "" then
+                        local titleMatches = {}
+                        for _, cand in ipairs(candidates) do
+                            if cand.title == item.winTitle then
+                                table.insert(titleMatches, cand)
+                            end
+                        end
+
+                        if #titleMatches == 1 then
+                            targetWin = titleMatches[1].win
+                            print("[EdgeDock] 恢复时标题唯一匹配: " .. item.appName .. ", title=" .. item.winTitle)
+                        elseif #titleMatches > 1 then
+                            -- 多个窗口有相同标题，无法确定哪个是原来的
+                            -- 从文件恢复时也保持严格，避免连错窗口
+                            print("[EdgeDock] 恢复失败: 有 " .. #titleMatches .. " 个窗口标题相同，无法确定原窗口: " .. item.winTitle)
+                            -- 不设置 targetWin，跳过此槽位
+                        end
+                    end
+
+                    -- 匹配策略3: 如果应用只有一个窗口且原窗口没有标题
+                    if not targetWin and (not item.winTitle or item.winTitle == "") then
+                        if #candidates == 1 then
+                            targetWin = candidates[1].win
+                            print("[EdgeDock] 恢复时单窗口无标题匹配: " .. item.appName)
+                        else
+                            print("[EdgeDock] 恢复失败: 应用有 " .. #candidates .. " 个窗口且原窗口无标题，无法确定: " .. item.appName)
+                            -- 不设置 targetWin，跳过此槽位
+                        end
+                    end
+
+                    if targetWin then
+                        print(prefix .. " [RESTORE_STATE]   槽位 " .. item.slotIndex .. " 恢复成功: " .. item.appName .. ", newWinId=" .. tostring(targetWin:id()))
+                        -- 恢复 originalFrame
+                        local frame = hs.geometry.rect(
+                            item.originalFrame.x,
+                            item.originalFrame.y,
+                            item.originalFrame.w,
+                            item.originalFrame.h
+                        )
+
+                        -- 使用槽位记录的屏幕，避免启动时小条/窗口被放到错误显示器
+                        local screen = EdgeDock.getSlotScreenFrame(item)
+
+                        -- 获取槽位位置
+                        local sx, sy, sw, sh = EdgeDock.getSlotPosition(item.slotIndex, screen)
+
+                        -- 计算窗口在槽位区域内的垂直居中位置
+                        local winY = sy + (sh - frame.h) / 2
+                        if winY < screen.y then
+                            winY = screen.y
+                        end
+                        if winY + frame.h > screen.y + screen.h then
+                            winY = screen.y + screen.h - frame.h
+                        end
+
+                        -- 保存到槽位
+                        EdgeDock.slots[item.slotIndex] = {
+                            win = targetWin,
+                            winId = targetWin:id(),
+                            originalFrame = frame,
+                            appName = item.appName,
+                            isShowing = false,
+                            hideTimer = nil,
+                            slotY = sy,
+                            slotHeight = sh,
+                            winY = winY,
+                            screenId = item.screenId,  -- 保留原屏幕信息
+                        }
+
+                        -- 隐藏窗口到屏幕右下角
+                        local hideX = screen.x + screen.w - 1
+                        local hideY = screen.y + screen.h - 1
+                        setWinFrame(targetWin, hs.geometry.rect(hideX, hideY, frame.w, frame.h))
+
+                        restoredCount = restoredCount + 1
+                    else
+                        print(prefix .. " [RESTORE_STATE]   槽位 " .. item.slotIndex .. " 恢复失败: 未找到匹配窗口 (" .. item.appName .. ")")
+                    end
+                elseif app then
+                    -- app 对象存在但不是有效的应用对象（例如可能是错误保存的 timer 对象）
+                    print(prefix .. " [RESTORE_STATE]   槽位 " .. item.slotIndex .. " 恢复失败: 应用对象无效 (" .. item.appName .. ")，清理槽位")
+                else
+                    print(prefix .. " [RESTORE_STATE]   槽位 " .. item.slotIndex .. " 恢复失败: 应用未运行 (" .. item.appName .. ")")
+                end
+
+                -- 链式处理下一个槽位，避免同步阻塞主线程
+                processItem(idx + 1)
+            end
+
             local app = hs.application.get(item.appName)
             if not app then
                 -- 尝试启动应用
                 print(prefix .. " [RESTORE_STATE]   尝试启动应用: " .. item.appName)
                 hs.application.launchOrFocus(item.appName)
-                -- 等待应用启动
-                hs.timer.usleep(500000) -- 500ms
-                app = hs.application.get(item.appName)
-                if app then
-                    print(prefix .. " [RESTORE_STATE]   应用启动成功: " .. item.appName)
-                else
-                    print(prefix .. " [RESTORE_STATE]   应用启动失败: " .. item.appName)
-                end
-            end
-            
-            -- 安全检查：确保 app 是有效的应用对象且有 allWindows 方法
-            if app and type(app.allWindows) == "function" then
-                -- 查找匹配的窗口
-                local targetWin = nil
-                local windows = app:allWindows()
-                local candidates = {}
-                
-                -- 收集所有标准窗口
-                for _, win in ipairs(windows) do
-                    if win:isStandard() then
-                        table.insert(candidates, {
-                            win = win,
-                            title = win:title() or "",
-                            id = win:id()
-                        })
-                    end
-                end
-                
-                -- 匹配策略1: 优先通过 winId 匹配（如果窗口仍然存在）
-                if item.winId then
-                    print(prefix .. " [RESTORE_STATE]   尝试winId匹配: " .. tostring(item.winId))
-                    for _, cand in ipairs(candidates) do
-                        print(prefix .. " [RESTORE_STATE]     检查候选: id=" .. tostring(cand.id) .. ", title=[" .. cand.title .. "]")
-                        if cand.id == item.winId then
-                            targetWin = cand.win
-                            print(prefix .. " [RESTORE_STATE]   winId匹配成功: " .. item.appName .. ", id=" .. tostring(item.winId))
-                            break
-                        end
-                    end
-                    if not targetWin then
-                        print(prefix .. " [RESTORE_STATE]   winId匹配失败: 没有候选窗口匹配 " .. tostring(item.winId))
-                    end
-                end
-                
-                -- 匹配策略2: 通过窗口标题匹配
-                -- 只在标题唯一时匹配，避免连错窗口
-                if not targetWin and item.winTitle and item.winTitle ~= "" then
-                    local titleMatches = {}
-                    for _, cand in ipairs(candidates) do
-                        if cand.title == item.winTitle then
-                            table.insert(titleMatches, cand)
-                        end
-                    end
-                    
-                    if #titleMatches == 1 then
-                        targetWin = titleMatches[1].win
-                        print("[EdgeDock] 恢复时标题唯一匹配: " .. item.appName .. ", title=" .. item.winTitle)
-                    elseif #titleMatches > 1 then
-                        -- 多个窗口有相同标题，无法确定哪个是原来的
-                        -- 从文件恢复时也保持严格，避免连错窗口
-                        print("[EdgeDock] 恢复失败: 有 " .. #titleMatches .. " 个窗口标题相同，无法确定原窗口: " .. item.winTitle)
-                        -- 不设置 targetWin，跳过此槽位
-                    end
-                end
-                
-                -- 匹配策略3: 如果应用只有一个窗口且原窗口没有标题
-                if not targetWin and (not item.winTitle or item.winTitle == "") then
-                    if #candidates == 1 then
-                        targetWin = candidates[1].win
-                        print("[EdgeDock] 恢复时单窗口无标题匹配: " .. item.appName)
+                -- 异步等待应用启动，不再 usleep 阻塞主线程
+                hs.timer.doAfter(0.5, function()
+                    app = hs.application.get(item.appName)
+                    if app then
+                        print(prefix .. " [RESTORE_STATE]   应用启动成功: " .. item.appName)
                     else
-                        print("[EdgeDock] 恢复失败: 应用有 " .. #candidates .. " 个窗口且原窗口无标题，无法确定: " .. item.appName)
-                        -- 不设置 targetWin，跳过此槽位
+                        print(prefix .. " [RESTORE_STATE]   应用启动失败: " .. item.appName)
                     end
-                end
-                
-                if targetWin then
-                    print(prefix .. " [RESTORE_STATE]   槽位 " .. item.slotIndex .. " 恢复成功: " .. item.appName .. ", newWinId=" .. tostring(targetWin:id()))
-                    -- 恢复 originalFrame
-                    local frame = hs.geometry.rect(
-                        item.originalFrame.x,
-                        item.originalFrame.y,
-                        item.originalFrame.w,
-                        item.originalFrame.h
-                    )
-                    
-                    -- 使用主屏幕（启动时小条在主屏幕）
-                    local screen = hs.screen.mainScreen():frame()
-                    
-                    -- 获取槽位位置
-                    local sx, sy, sw, sh = EdgeDock.getSlotPosition(item.slotIndex, screen)
-                    
-                    -- 计算窗口在槽位区域内的垂直居中位置
-                    local winY = sy + (sh - frame.h) / 2
-                    if winY < screen.y then
-                        winY = screen.y
-                    end
-                    if winY + frame.h > screen.y + screen.h then
-                        winY = screen.y + screen.h - frame.h
-                    end
-                    
-                    -- 保存到槽位
-                    EdgeDock.slots[item.slotIndex] = {
-                        win = targetWin,
-                        winId = targetWin:id(),
-                        originalFrame = frame,
-                        appName = item.appName,
-                        isShowing = false,
-                        hideTimer = nil,
-                        slotY = sy,
-                        slotHeight = sh,
-                        winY = winY,
-                        screenId = item.screenId,  -- 保留原屏幕信息
-                    }
-                    
-                    -- 隐藏窗口到屏幕右下角
-                    local hideX = screen.x + screen.w - 1
-                    local hideY = screen.y + screen.h - 1
-                    setWinFrame(targetWin, hs.geometry.rect(hideX, hideY, frame.w, frame.h))
-                    
-                    restoredCount = restoredCount + 1
-                else
-                    print(prefix .. " [RESTORE_STATE]   槽位 " .. item.slotIndex .. " 恢复失败: 未找到匹配窗口 (" .. item.appName .. ")")
-                end
-            elseif app then
-                -- app 对象存在但不是有效的应用对象（例如可能是错误保存的 timer 对象）
-                print(prefix .. " [RESTORE_STATE]   槽位 " .. item.slotIndex .. " 恢复失败: 应用对象无效 (" .. item.appName .. ")，清理槽位")
+                    doRestore(app)
+                end)
             else
-                print(prefix .. " [RESTORE_STATE]   槽位 " .. item.slotIndex .. " 恢复失败: 应用未运行 (" .. item.appName .. ")")
+                doRestore(app)
             end
         end
-        
-        print(prefix .. " [RESTORE_STATE] 恢复完成: " .. restoredCount .. "/" .. #state .. " 个窗口已恢复")
-        
-        -- 刷新小条显示
-        EdgeDock.refreshBars()
-        
-        if restoredCount > 0 then
-            notify("Edge Dock", "已恢复 " .. restoredCount .. " 个窗口")
-        end
+
+        processItem(1)
     end)
 end
 
@@ -832,10 +865,11 @@ function EdgeDock.dockWindow(win, slotIndex, options)
     local app = win:application()
     local frame = win:frame()
     
-    -- 使用当前鼠标所在的屏幕（支持多显示器）
-    local screen = EdgeDock.getCurrentScreen()
+    -- 使用窗口自身所在的屏幕（支持多显示器，避免跟随鼠标漂移）
+    local winScreenObj = win:screen()
+    local screen = winScreenObj and winScreenObj:frame() or EdgeDock.getCurrentScreen()
     
-    -- 获取槽位位置（基于当前屏幕）
+    -- 获取槽位位置（基于窗口所在屏幕）
     local sx, sy, sw, sh = EdgeDock.getSlotPosition(slotIndex, screen)
     
     -- 计算窗口在槽位区域内的垂直居中位置
@@ -1270,9 +1304,9 @@ function EdgeDock.peekWindow(slotIndex)
     end
     
     if not slot.isShowing then
-        -- 使用当前鼠标所在的屏幕（支持多显示器）
-        local screen = EdgeDock.getCurrentScreen()
-        
+        -- 使用槽位绑定的屏幕，避免 hideTimer 异步触发时鼠标已切到另一块屏
+        local screen = EdgeDock.getSlotScreenFrame(slot)
+
         -- 更新槽位位置（可能在不同的显示器上）
         local sx, sy, sw, sh = EdgeDock.getSlotPosition(slotIndex, screen)
         slot.slotY = sy
@@ -1332,8 +1366,8 @@ function EdgeDock.hideWindow(slotIndex)
     
     -- 如果找到窗口，移动它
     if win then
-        -- 使用当前鼠标所在的屏幕（支持多显示器）
-        local screen = EdgeDock.getCurrentScreen()
+        -- 使用槽位绑定的屏幕，避免异步 hide 时跟随鼠标切屏
+        local screen = EdgeDock.getSlotScreenFrame(slot)
         -- 移到屏幕右下角（只露出1x1像素，保持原尺寸）
         local hideX = screen.x + screen.w - 1
         local hideY = screen.y + screen.h - 1
@@ -1380,6 +1414,14 @@ end
 
 -- 鼠标移动监听（仅用于悬停检测，不拦截事件）
 EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, function(e)
+    local now = hs.timer.secondsSinceEpoch()
+    EdgeDock.lastMouseMoveTime = now
+    -- 居中/贴边检测节流：约 200ms 一次，避免高频 AX 调用
+    local checkFrame = now - (EdgeDock.lastCenteredCheck or 0) >= 0.2
+    if checkFrame then
+        EdgeDock.lastCenteredCheck = now
+    end
+
     local mousePos = e:location()
     -- 使用当前鼠标所在的屏幕（支持多显示器）
     local screen = EdgeDock.getCurrentScreen()
@@ -1433,7 +1475,8 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
                           and mousePos.y >= sy - r.topExtend - 5 and mousePos.y <= sy + sh + r.bottomExtend + 5
             
             -- 检测窗口是否被居中（用户手动居中后需要暂停移出检测）
-            if not slot.centeredPaused then
+            -- 节流：约 200ms 检查一次，避免高频 AX 调用
+            if checkFrame and not slot.centeredPaused then
                 local win = slot.win
                 if win then
                     local currentFrame = win:frame()
@@ -1456,7 +1499,7 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
             if inWindow and not wasInWindow then
                 -- 鼠标进入窗口：如果之前是居中暂停状态，且窗口是贴边显示（非居中），才恢复正常检测
                 -- 窗口被居中后，不应该因为鼠标进入而恢复检测，否则跨屏幕回来时又会缩回去
-                if slot.centeredPaused then
+                if checkFrame and slot.centeredPaused then
                     local win = slot.win
                     if win then
                         local currentFrame = win:frame()
@@ -1551,10 +1594,11 @@ EdgeDock.screenWatcher = hs.screen.watcher.new(function()
     end)
 end)
 
--- 系统休眠/唤醒监听
+-- 系统休眠/唤醒/锁屏监听（事件驱动，避免轮询）
 EdgeDock.caffeinateWatcher = hs.caffeinate.watcher.new(function(eventType)
     local prefix = EdgeDock.logPrefix()
     if eventType == hs.caffeinate.watcher.systemDidWake then
+        EdgeDock.isSystemSleeping = false
         print(prefix .. " [CAFFEINATE] ====== 系统唤醒 ======")
         print(prefix .. " [CAFFEINATE] 当前槽位状态:")
         for i = 1, EdgeDock.config.maxSlots do
@@ -1619,6 +1663,7 @@ EdgeDock.caffeinateWatcher = hs.caffeinate.watcher.new(function(eventType)
             print(prefix .. " [CAFFEINATE] 结果: " .. reconnectedCount .. " 个成功, 失败: " .. table.concat(failedSlots, ", "))
         end)
     elseif eventType == hs.caffeinate.watcher.systemWillSleep then
+        EdgeDock.isSystemSleeping = true
         print(prefix .. " [CAFFEINATE] ====== 系统即将休眠 ======")
         print(prefix .. " [CAFFEINATE] 当前槽位状态:")
         for i = 1, EdgeDock.config.maxSlots do
@@ -1637,11 +1682,18 @@ EdgeDock.caffeinateWatcher = hs.caffeinate.watcher.new(function(eventType)
         EdgeDock.saveState()
         print(prefix .. " [CAFFEINATE] ====== 休眠准备完成 ======")
     elseif eventType == hs.caffeinate.watcher.screensDidWake then
+        EdgeDock.isSystemSleeping = false
         -- 屏幕唤醒时恢复验证定时器（如果还没启动）
         if EdgeDock.validationTimer and not EdgeDock.validationTimer:running() then
             print(prefix .. " [CAFFEINATE] 屏幕唤醒，恢复验证定时器")
             EdgeDock.validationTimer:start()
         end
+    elseif eventType == hs.caffeinate.watcher.screensDidLock then
+        EdgeDock.isScreenLocked = true
+        print(prefix .. " [CAFFEINATE] 屏幕已锁定")
+    elseif eventType == hs.caffeinate.watcher.screensDidUnlock then
+        EdgeDock.isScreenLocked = false
+        print(prefix .. " [CAFFEINATE] 屏幕已解锁")
     end
 end)
 
@@ -1696,47 +1748,19 @@ function EdgeDock.start()
     EdgeDock.caffeinateWatcher:start()
     EdgeDock.appearanceWatcher:start()
     
+    -- 系统状态标志（由事件驱动维护，避免轮询）
+    EdgeDock.isScreenLocked = false
+    EdgeDock.isSystemSleeping = false
+
     -- 启动定期验证定时器（每 5 秒验证一次槽位，清理已关闭的窗口）
     -- 使用失败计数器：连续 3 次验证失败才清理，避免窗口暂时不可用时被误清理
     EdgeDock.validationTimer = hs.timer.doEvery(5, function()
         local prefix = EdgeDock.logPrefix()
         local changed = false
-        
-        -- 检查系统是否正在休眠或锁屏（通过检查电源状态和屏幕状态）
-        -- 如果正在休眠/唤醒/锁屏过程中，跳过本次验证
-        local isSystemAwake = true
-        
-        -- 方法1: 检查电源状态
-        local powerHandle = io.popen("pmset -g systemstate 2>/dev/null | grep -i 'sleep' | head -1")
-        if powerHandle then
-            local powerState = powerHandle:read("*l") or ""
-            powerHandle:close()
-            if powerState ~= "" and string.find(string.lower(powerState), "sleep") then
-                print(prefix .. " [VALIDATION_TIMER] 系统正在休眠（systemstate），跳过验证")
-                isSystemAwake = false
-            end
-        end
-        
-        -- 方法2: 检查屏幕是否锁定（通过会话状态）
-        if isSystemAwake then
-            local sessionHandle = io.popen("ls -la /tmp/com.apple.ScreenSharing* 2>/dev/null | wc -l")
-            if sessionHandle then
-                local count = tonumber(sessionHandle:read("*l")) or 0
-                sessionHandle:close()
-                -- 这个方法不太可靠，仅作为参考
-            end
-        end
-        
-        -- 方法3: 检查系统是否刚唤醒（通过检查 CGSession 状态）
-        if isSystemAwake then
-            local cgHandle = io.popen("ps aux | grep -i 'coregraphics' | grep -v grep | wc -l")
-            if cgHandle then
-                cgHandle:close()  -- 这个方法也不太准确
-            end
-        end
-        
-        -- 如果验证定时器被显式暂停（如休眠期间），也跳过
-        if not isSystemAwake then
+
+        -- 锁屏或休眠期间跳过验证（由 watcher 事件维护标志位）
+        if EdgeDock.isSystemSleeping or EdgeDock.isScreenLocked then
+            print(prefix .. " [VALIDATION_TIMER] 系统休眠/锁屏中，跳过验证")
             return
         end
         

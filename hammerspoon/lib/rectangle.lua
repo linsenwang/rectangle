@@ -11,8 +11,11 @@
 hs.hotkey.bind(mash, "left", function()
     local win = hs.window.focusedWindow()
     if not win then return end
-    saveWindowState(win)
-    
+    -- 只在窗口不处于任何受管布局时才保存快照，避免循环时覆盖原始位置
+    if not detectLayoutMode(win) then
+        saveWindowState(win)
+    end
+
     local id = win:id()
     local max = getWinScreen(win)
     local area = getUsableArea(max, win)
@@ -52,8 +55,11 @@ end)
 hs.hotkey.bind(mash, "right", function()
     local win = hs.window.focusedWindow()
     if not win then return end
-    saveWindowState(win)
-    
+    -- 只在窗口不处于任何受管布局时才保存快照，避免循环时覆盖原始位置
+    if not detectLayoutMode(win) then
+        saveWindowState(win)
+    end
+
     local id = win:id()
     local max = getWinScreen(win)
     local area = getUsableArea(max, win)
@@ -477,7 +483,7 @@ end)
 -- ============================================
 
 -- 检测窗口当前的布局模式
-local function detectLayoutMode(win)
+function detectLayoutMode(win)
     local screen = win:screen()
     if not screen then return nil end
     local max = screen:frame()

@@ -1,25 +1,37 @@
 -- ============================================
 -- Window Context 模块
 -- 每 5 秒捕获当前窗口 OCR 并推送到本地上下文引擎
+-- 改为异步 hs.task，避免阻塞主线程
 -- ============================================
 
 local INTERVAL = 5
 local BIN = os.getenv("HOME") .. "/.local/bin/window-ocr"
 local API = "http://127.0.0.1:16789"
 local LOG = os.getenv("HOME") .. "/.hammerspoon/wc.log"
+local LOG_MAX_BYTES = 1024 * 1024  -- 日志上限 1MB，超过则清空
+
+local screenLocked = false
+local lastInfo = nil
+local lastOCRText = nil
+local ocrTask = nil
+
+-- 日志滚动：超过上限时清空（避免无界增长）
+local function rotateLogIfNeeded()
+    local attr = hs.fs.attributes(LOG)
+    if attr and attr.size > LOG_MAX_BYTES then
+        local f = io.open(LOG, "w")
+        if f then f:close() end
+    end
+end
 
 local function log(msg)
+    rotateLogIfNeeded()
     local f = io.open(LOG, "a")
     if f then
         f:write(os.date("%Y-%m-%d %H:%M:%S") .. " " .. msg .. "\n")
         f:close()
     end
     print(msg)
-end
-
--- 简单 shell quote
-local function q(s)
-    return "'" .. string.gsub(s, "'", "'\\''") .. "'"
 end
 
 local function ensureBinary()
@@ -39,14 +51,40 @@ local function frontmostWindowInfo()
     return {
         app = app:name() or "Unknown",
         title = win:title() or "",
-        x = math.max(0, math.floor(frame.x)),
-        y = math.max(0, math.floor(frame.y)),
+        x = math.floor(frame.x),
+        y = math.floor(frame.y),
         w = math.max(1, math.floor(frame.w)),
         h = math.max(1, math.floor(frame.h)),
     }
 end
 
-local function captureAndPushSync()
+local function infoEqual(a, b)
+    return a.app == b.app
+       and a.title == b.title
+       and a.x == b.x
+       and a.y == b.y
+       and a.w == b.w
+       and a.h == b.h
+end
+
+-- 监听锁屏/休眠事件，锁屏时跳过 OCR（隐私+性能）
+local lockWatcher = hs.caffeinate.watcher.new(function(eventType)
+    if eventType == hs.caffeinate.watcher.screensDidLock
+       or eventType == hs.caffeinate.watcher.systemWillSleep then
+        screenLocked = true
+    elseif eventType == hs.caffeinate.watcher.screensDidUnlock
+       or eventType == hs.caffeinate.watcher.systemDidWake then
+        screenLocked = false
+    end
+end)
+lockWatcher:start()
+
+local function captureAndPush()
+    -- 锁屏/休眠时直接跳过
+    if screenLocked then
+        return
+    end
+
     local info = frontmostWindowInfo()
     if not info then
         log("[SKIP] No frontmost window")
@@ -57,35 +95,64 @@ local function captureAndPushSync()
         return
     end
 
-    local cmd = string.format(
-        "%s %d %d %d %d %s %s",
-        q(BIN), info.x, info.y, info.w, info.h,
-        q(info.app), q(info.title)
-    )
+    -- 窗口位置/标题未变化且已有 OCR 结果时跳过，减少无意义截图
+    if lastInfo and infoEqual(lastInfo, info) and lastOCRText then
+        return
+    end
+    lastInfo = info
 
     log("[OCR] " .. info.app .. " | " .. info.title)
-    local output, status, typ, rc = hs.execute(cmd, true)
-    if not output or output == "" then
-        log("[FAIL] OCR empty output, rc=" .. tostring(rc))
-        return
+
+    -- 终止上一次未完成的 OCR 任务，避免队列堆积
+    if ocrTask and ocrTask:isRunning() then
+        ocrTask:terminate()
     end
 
-    local jsonOk, data = pcall(hs.json.decode, output)
-    if not jsonOk or not data then
-        log("[FAIL] Bad JSON: " .. output:sub(1, 100))
-        return
-    end
-
-    local payload = hs.json.encode(data)
-    hs.http.doAsyncRequest(API .. "/ocr", "POST", payload, {
-        ["Content-Type"] = "application/json"
-    }, function(code, body, headers)
-        if code == 200 then
-            log("[OK] " .. info.app .. " -> engine")
-        else
-            log("[FAIL] POST code=" .. tostring(code))
+    ocrTask = hs.task.new(BIN, function(exitCode, stdOut, stdErr)
+        if exitCode ~= 0 then
+            log("[FAIL] OCR exit=" .. tostring(exitCode) .. " err=" .. tostring(stdErr))
+            return
         end
-    end)
+        if not stdOut or stdOut == "" then
+            log("[FAIL] OCR empty output")
+            return
+        end
+
+        local jsonOk, data = pcall(hs.json.decode, stdOut)
+        if not jsonOk or not data then
+            log("[FAIL] Bad JSON: " .. stdOut:sub(1, 100))
+            return
+        end
+
+        -- 变化检测：OCR 结果未变则不再 POST
+        local text = stdOut
+        if text == lastOCRText then
+            return
+        end
+        lastOCRText = text
+
+        local payload = hs.json.encode(data)
+        hs.http.doAsyncRequest(API .. "/ocr", "POST", payload, {
+            ["Content-Type"] = "application/json"
+        }, function(code, body, headers)
+            if code == 200 then
+                log("[OK] " .. info.app .. " -> engine")
+            else
+                log("[FAIL] POST code=" .. tostring(code))
+            end
+        end)
+    end, {
+        tostring(info.x),
+        tostring(info.y),
+        tostring(info.w),
+        tostring(info.h),
+        info.app,
+        info.title,
+    })
+
+    if ocrTask then
+        ocrTask:start()
+    end
 end
 
 -- 对外接口：获取当前窗口的上下文摘要
@@ -124,8 +191,8 @@ end
 
 -- 启动
 if ensureBinary() then
-    captureAndPushSync()
-    hs.timer.doEvery(INTERVAL, captureAndPushSync)
+    captureAndPush()
+    hs.timer.doEvery(INTERVAL, captureAndPush)
     log("[START] Window Context interval=" .. INTERVAL .. "s")
 else
     log("[START] Window Context failed: binary not found")

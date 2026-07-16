@@ -8,6 +8,7 @@ local DisplayLayoutManager = {
     lastScreenCount = 0,        -- 上次屏幕数量
     isRestoring = false,        -- 是否正在恢复中（避免递归）
     stateFile = CONFIG_PATH .. DisplayLayoutConfig.stateFile,
+    screenChangeTimer = nil,    -- 屏幕变化去抖动定时器
 }
 
 -- 获取当前屏幕配置的唯一标识
@@ -42,6 +43,7 @@ function DisplayLayoutManager.saveLayout(showNotify)
                 local screen = win:screen()
                 if app and screen then
                     local frame = win:frame()
+                    local screenFrame = screen:frame()
                     table.insert(layout, {
                         app = app:name(),
                         title = win:title(),
@@ -52,6 +54,7 @@ function DisplayLayoutManager.saveLayout(showNotify)
                         y = frame.y,
                         w = frame.w,
                         h = frame.h,
+                        screenH = screenFrame.h,  -- 保存时记录屏幕高度，供恢复时全高判断
                     })
                 end
             end
@@ -91,14 +94,19 @@ end
 
 -- 恢复指定配置的布局
 function DisplayLayoutManager.restoreLayout(targetConfig)
+    if DisplayLayoutManager.isRestoring then
+        print("[DisplayLayout] 恢复已在进行中，忽略重入")
+        return false
+    end
+
     targetConfig = targetConfig or DisplayLayoutManager.getScreenConfig()
     local layout = DisplayLayoutManager.savedLayouts[targetConfig]
-    
+
     if not layout then
         print("[DisplayLayout] 没有找到配置 " .. targetConfig .. " 的布局")
         return false
     end
-    
+
     DisplayLayoutManager.isRestoring = true
     
     -- 获取当前所有屏幕
@@ -174,18 +182,14 @@ function DisplayLayoutManager.restoreLayout(targetConfig)
                 local newY = math.max(screenFrame.y, math.min(item.y, screenFrame.y + screenFrame.h - item.h))
                 
                 -- 如果窗口原本是占满屏幕高度的，保持全高
-                local frame = win:frame()
-                local currentScreen = win:screen()
-                if currentScreen then
-                    local currentFrame = currentScreen:frame()
-                    -- 检测是否是全高窗口
-                    if math.abs(item.h - currentFrame.h) < 20 then
-                        newY = screenFrame.y
-                        item.h = screenFrame.h
-                    end
+                -- 使用保存时的屏幕高度作参照，避免跨显示器恢复时参照系错误
+                local restoreH = item.h
+                if item.screenH and math.abs(item.h - item.screenH) < 20 then
+                    newY = screenFrame.y
+                    restoreH = screenFrame.h
                 end
-                
-                setWinFrame(win, hs.geometry.rect(newX, newY, item.w, item.h))
+
+                setWinFrame(win, hs.geometry.rect(newX, newY, item.w, restoreH))
                 restoredCount = restoredCount + 1
                 print(string.format("[DisplayLayout] 恢复窗口: %s - %s 到屏幕 %s", 
                     item.app, item.title or "", targetScreen:name()))
@@ -267,17 +271,21 @@ end
 function DisplayLayoutManager.init()
     -- 加载保存的布局
     DisplayLayoutManager.loadLayouts()
-    
+
     -- 记录初始屏幕数量
     DisplayLayoutManager.lastScreenCount = DisplayLayoutManager.getScreenCount()
-    
+
+    -- 屏幕变化统一走 onScreenChange，并用 delayed timer 去抖
+    DisplayLayoutManager.screenChangeTimer = hs.timer.delayed.new(1.5, function()
+        DisplayLayoutManager.onScreenChange()
+    end)
+
     -- 创建屏幕监听器
     DisplayLayoutManager.screenWatcher = hs.screen.watcher.new(function()
-        -- 延迟处理，等待屏幕完全初始化
-        hs.timer.doAfter(1, DisplayLayoutManager.onScreenChange)
+        DisplayLayoutManager.screenChangeTimer:start()
     end)
     DisplayLayoutManager.screenWatcher:start()
-    
+
     -- 系统休眠/唤醒监听（休眠时通常会断开外接显示器）
     DisplayLayoutManager.caffeinateWatcher = hs.caffeinate.watcher.new(function(eventType)
         if eventType == hs.caffeinate.watcher.systemWillSleep then
@@ -285,15 +293,12 @@ function DisplayLayoutManager.init()
             -- DisplayLayoutManager.saveLayout()
         elseif eventType == hs.caffeinate.watcher.systemDidWake then
             print("[DisplayLayout] 系统唤醒，屏幕数量: " .. DisplayLayoutManager.getScreenCount())
-            -- 唤醒后更新屏幕数量，避免误判
-            hs.timer.doAfter(3, function()
-                DisplayLayoutManager.lastScreenCount = DisplayLayoutManager.getScreenCount()
-                print("[DisplayLayout] 唤醒后屏幕数量更新为: " .. DisplayLayoutManager.lastScreenCount)
-            end)
+            -- 唤醒后统一走 onScreenChange 更新 lastScreenCount，避免多路径覆盖
+            DisplayLayoutManager.screenChangeTimer:start()
         end
     end)
     DisplayLayoutManager.caffeinateWatcher:start()
-    
+
     print("[DisplayLayout] 显示器布局管理器已初始化，当前 " .. DisplayLayoutManager.lastScreenCount .. " 个屏幕")
 end
 

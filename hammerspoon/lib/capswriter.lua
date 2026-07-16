@@ -1,6 +1,7 @@
 -- ============================================
 -- CapsWriter UDP 控制器
 -- 用 Hammerspoon 监听鼠标侧键和键盘快捷键，绕过 pynput 的限制
+-- 直接使用 hs.socket.udp，避免 fork Python 子进程
 -- ============================================
 
 local M = {}
@@ -24,8 +25,9 @@ M.config = {
 
 -- 内部状态
 local isRecording = false
-local statusUdp = nil            -- UDP 状态监听对象
 local lastAlertUUID = nil        -- 上一个悬浮窗的 UUID，用于关闭避免重叠
+local udpClient = nil            -- 发送命令的 UDP socket
+local statusSocket = nil         -- 接收状态回传的 UDP socket
 
 -- 显示提示（自动关闭上一个，避免重叠）
 local function showAlert(message, timeout)
@@ -35,89 +37,75 @@ local function showAlert(message, timeout)
     lastAlertUUID = hs.alert.show(message, M.config.alertStyle, nil, timeout or M.config.alertTimeout)
 end
 
--- 发送 UDP 命令（异步，不阻塞 Hammerspoon）
+-- 发送 UDP 命令（使用原生 hs.socket.udp，无 shell fork）
 local function sendUDP(cmd)
-    local pyScript = string.format(
-        "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.sendto(b'%s',('%s',%d))",
-        cmd, M.config.host, M.config.port
-    )
-    hs.task.new("/usr/bin/python3", function(exitCode, stdOut, stdErr)
-        if exitCode ~= 0 then
-            showAlert("❌ CapsWriter UDP 发送失败\n" .. tostring(stdErr), 2)
+    if not udpClient then
+        local ok, sock = pcall(hs.socket.udp.new)
+        if ok and sock then
+            local connOk = pcall(function() sock:connect(M.config.host, M.config.port) end)
+            if connOk then
+                udpClient = sock
+                print(string.format("[CapsWriter] UDP 客户端已连接 %s:%d", M.config.host, M.config.port))
+            else
+                showAlert("❌ CapsWriter UDP 连接失败", 2)
+                return
+            end
+        else
+            showAlert("❌ CapsWriter UDP 不可用", 2)
+            return
         end
-    end, {"-c", pyScript}):start()
+    end
+
+    local ok, err = pcall(function() udpClient:send(cmd) end)
+    if not ok then
+        showAlert("❌ CapsWriter UDP 发送失败\n" .. tostring(err), 2)
+        -- 连接可能已失效，下次重建
+        pcall(function() udpClient:close() end)
+        udpClient = nil
+    end
 end
 
--- UDP 状态监听任务（hs.udp 不可用时用 Python 备选）
-M.statusTask = nil
+-- 处理 CapsWriter 状态报文
+local function handleStatus(data)
+    if not data then return end
+    data = data:gsub("^%s*(.-)%s*$", "%1")
+    if data:match("^STATUS:") then
+        local statusLine = data:match("^STATUS:(.+)$")
+        if statusLine then
+            local statusType, message = statusLine:match("^([^|]+)|(.+)$")
+            if message then
+                showAlert(message)
+                print(string.format("[CapsWriter] 状态更新: %s", message))
+            end
+        end
+    end
+end
 
 -- 启动 UDP 状态监听（接收 CapsWriter 处理状态）
 local function startStatusListener()
-    if M.statusTask and M.statusTask:isRunning() then
+    if statusSocket and not statusSocket:closed() then
         return
     end
 
-    local pyScript = [[import socket, sys
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-sock.bind(('127.0.0.1', 6019))
-sock.settimeout(1.0)
-print("UDP_STATUS_LISTENER_READY")
-sys.stdout.flush()
-while True:
-    try:
-        data, addr = sock.recvfrom(1024)
-        line = data.decode('utf-8', errors='ignore').strip()
-        if line.startswith('STATUS:'):
-            print(line)
-            sys.stdout.flush()
-    except socket.timeout:
-        pass
-    except KeyboardInterrupt:
-        break
-    except Exception as e:
-        print(f"ERROR:{e}")
-        sys.stdout.flush()
-        break
-sock.close()
-]]
+    local ok, sock = pcall(function()
+        return hs.socket.udp.server(M.config.statusPort, function(data, addr)
+            handleStatus(data)
+        end):receive()
+    end)
 
-    M.statusTask = hs.task.new("/usr/bin/python3", nil, function(task, stdOut, stdErr)
-        if stdOut then
-            stdOut = stdOut:gsub("^%s*(.-)%s*$", "%1")
-            if stdOut:match("^STATUS:") then
-                local statusLine = stdOut:match("^STATUS:(.+)$")
-                if statusLine then
-                    local statusType, message = statusLine:match("^([^|]+)|(.+)$")
-                    if message then
-                        showAlert(message)
-                        print(string.format("[CapsWriter] 状态更新: %s", message))
-                    end
-                end
-            elseif stdOut == "UDP_STATUS_LISTENER_READY" then
-                print(string.format("[CapsWriter] Python UDP 状态监听已启动 | port=%d", M.config.statusPort))
-            end
-        end
-        if stdErr and stdErr:match("^%s*(.-)%s*$") ~= "" then
-            print(string.format("[CapsWriter] 状态监听 stderr: %s", stdErr:gsub("^%s*(.-)%s*$", "%1")))
-        end
-        return true
-    end, {"-c", pyScript})
-
-    if M.statusTask then
-        M.statusTask:start()
+    if ok and sock then
+        statusSocket = sock
+        print(string.format("[CapsWriter] UDP 状态监听已启动 | port=%d", M.config.statusPort))
     else
-        print("[CapsWriter] 状态监听任务创建失败")
+        print(string.format("[CapsWriter] UDP 状态监听启动失败: %s", tostring(sock)))
     end
 end
 
 -- 停止 UDP 状态监听
 local function stopStatusListener()
-    if M.statusTask then
-        if M.statusTask:isRunning() then
-            M.statusTask:terminate()
-        end
-        M.statusTask = nil
+    if statusSocket then
+        pcall(function() statusSocket:close() end)
+        statusSocket = nil
         print("[CapsWriter] 状态监听已停止")
     end
 end
@@ -205,6 +193,10 @@ function M.stop()
         M.keyBinding:disable()
     end
     stopStatusListener()
+    if udpClient then
+        pcall(function() udpClient:close() end)
+        udpClient = nil
+    end
     showAlert("🎙️ CapsWriter 监听已停止", 2)
 end
 
