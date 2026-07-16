@@ -338,38 +338,38 @@ end)
 -- 窗口移动（不改变大小）
 -- ============================================
 
-local moveStep = 50  -- 移动步长
+-- local moveStep = 50  -- 移动步长
 
--- 窗口移动（微调位置，使用 Cmd + Option + 方向键）
-local moveKey = {"cmd", "alt"}
+-- -- 窗口移动（微调位置，使用 Cmd + Option + 方向键）
+-- local moveKey = {"cmd", "alt"}
 
-hs.hotkey.bind(moveKey, "left", function()
-    local win = hs.window.focusedWindow()
-    if not win then return end
-    local frame = win:frame()
-    setWinFrame(win, hs.geometry.rect(frame.x - moveStep, frame.y, frame.w, frame.h))
-end)
+-- hs.hotkey.bind(moveKey, "left", function()
+--     local win = hs.window.focusedWindow()
+--     if not win then return end
+--     local frame = win:frame()
+--     setWinFrame(win, hs.geometry.rect(frame.x - moveStep, frame.y, frame.w, frame.h))
+-- end)
 
-hs.hotkey.bind(moveKey, "right", function()
-    local win = hs.window.focusedWindow()
-    if not win then return end
-    local frame = win:frame()
-    setWinFrame(win, hs.geometry.rect(frame.x + moveStep, frame.y, frame.w, frame.h))
-end)
+-- hs.hotkey.bind(moveKey, "right", function()
+--     local win = hs.window.focusedWindow()
+--     if not win then return end
+--     local frame = win:frame()
+--     setWinFrame(win, hs.geometry.rect(frame.x + moveStep, frame.y, frame.w, frame.h))
+-- end)
 
-hs.hotkey.bind(moveKey, "up", function()
-    local win = hs.window.focusedWindow()
-    if not win then return end
-    local frame = win:frame()
-    setWinFrame(win, hs.geometry.rect(frame.x, frame.y - moveStep, frame.w, frame.h))
-end)
+-- hs.hotkey.bind(moveKey, "up", function()
+--     local win = hs.window.focusedWindow()
+--     if not win then return end
+--     local frame = win:frame()
+--     setWinFrame(win, hs.geometry.rect(frame.x, frame.y - moveStep, frame.w, frame.h))
+-- end)
 
-hs.hotkey.bind(moveKey, "down", function()
-    local win = hs.window.focusedWindow()
-    if not win then return end
-    local frame = win:frame()
-    setWinFrame(win, hs.geometry.rect(frame.x, frame.y + moveStep, frame.w, frame.h))
-end)
+-- hs.hotkey.bind(moveKey, "down", function()
+--     local win = hs.window.focusedWindow()
+--     if not win then return end
+--     local frame = win:frame()
+--     setWinFrame(win, hs.geometry.rect(frame.x, frame.y + moveStep, frame.w, frame.h))
+-- end)
 
 -- ============================================
 -- 调整窗口大小
