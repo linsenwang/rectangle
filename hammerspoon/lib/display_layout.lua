@@ -63,13 +63,15 @@ function DisplayLayoutManager.saveLayout(showNotify)
     
     DisplayLayoutManager.savedLayouts[config] = layout
     
-    -- 保存到文件
-    local file = io.open(DisplayLayoutManager.stateFile, "w")
+    -- 原子写入：先写 *.tmp，再 rename
+    local tmpFile = DisplayLayoutManager.stateFile .. ".tmp"
+    local file = io.open(tmpFile, "w")
     if file then
         file:write(hs.json.encode(DisplayLayoutManager.savedLayouts))
         file:close()
+        os.rename(tmpFile, DisplayLayoutManager.stateFile)
     end
-    
+
     print("[DisplayLayout] 布局已保存 (" .. #layout .. " 个窗口, 配置: " .. config .. ")")
     
     if showNotify then
@@ -85,9 +87,12 @@ function DisplayLayoutManager.loadLayouts()
         local content = file:read("*all")
         file:close()
         local ok, layouts = pcall(function() return hs.json.decode(content) end)
-        if ok and layouts then
+        if ok and type(layouts) == "table" then
             DisplayLayoutManager.savedLayouts = layouts
             print("[DisplayLayout] 已从文件加载布局")
+        else
+            print("[DisplayLayout] 布局文件解析失败，使用空布局")
+            DisplayLayoutManager.savedLayouts = {}
         end
     end
 end

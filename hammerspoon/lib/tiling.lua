@@ -74,21 +74,6 @@ function TileManager.getTilingAreas()
     return areas
 end
 
--- 获取窗口当前所在的屏幕
-function TileManager.getWindowScreen(win)
-    local winScreen = win:screen()
-    if not winScreen then return nil end
-    
-    -- 获取所有屏幕并匹配
-    local allScreens = hs.screen.allScreens()
-    for _, screen in ipairs(allScreens) do
-        if screen:id() == winScreen:id() then
-            return screen
-        end
-    end
-    return winScreen
-end
-
 -- 按屏幕分组窗口
 -- 返回：{ screenId = { windows = {...}, area = {...} }, ... }
 function TileManager.groupWindowsByScreen(windows, areas)
@@ -123,55 +108,6 @@ function TileManager.groupWindowsByScreen(windows, areas)
     end
     
     return groups
-end
-
--- 计算多显示器的总宽度和高度
-function TileManager.getTotalArea(areas)
-    local minX, minY = math.huge, math.huge
-    local maxX, maxY = -math.huge, -math.huge
-    
-    for _, area in ipairs(areas) do
-        minX = math.min(minX, area.x)
-        minY = math.min(minY, area.y)
-        maxX = math.max(maxX, area.x + area.w)
-        maxY = math.max(maxY, area.y + area.h)
-    end
-    
-    return {
-        x = minX,
-        y = minY,
-        w = maxX - minX,
-        h = maxY - minY
-    }
-end
-
--- 根据窗口索引和总网格计算窗口应该放置的屏幕和位置
--- 返回：目标屏幕索引, 在该屏幕内的列, 行, 该屏幕的列数, 行数
-function TileManager.calcWindowPosition(winIndex, totalWindows, areas)
-    local screenCount = #areas
-    
-    -- 计算总网格
-    local totalCols, totalRows = TileManager.calcGrid(totalWindows)
-    
-    -- 计算每个显示器分配的窗口数
-    local windowsPerScreen = math.ceil(totalWindows / screenCount)
-    
-    -- 确定窗口属于哪个屏幕
-    local screenIndex = math.min(math.ceil(winIndex / windowsPerScreen), screenCount)
-    
-    -- 在该屏幕内的索引
-    local indexInScreen = winIndex - (screenIndex - 1) * windowsPerScreen
-    local windowsInThisScreen = math.min(windowsPerScreen, totalWindows - (screenIndex - 1) * windowsPerScreen)
-    
-    -- 计算该屏幕内的网格
-    local colsInScreen = math.min(totalCols, windowsInThisScreen)
-    local rowsInScreen = math.ceil(windowsInThisScreen / colsInScreen)
-    
-    -- 在该屏幕内的行列位置
-    local col = (indexInScreen - 1) % colsInScreen
-    local row = math.floor((indexInScreen - 1) / colsInScreen)
-    
-    return screenIndex, col, row, colsInScreen, rowsInScreen
 end
 
 -- 计算最优行列数（使布局接近正方形）
@@ -286,11 +222,13 @@ function TileManager.tile(appName, spacing)
         local win = hs.window.focusedWindow()
         if win then
             app = win:application()
-            appName = app:name()
+            if app then
+                appName = app:name()
+            end
         end
     end
-    
-    if not app then
+
+    if not app or not appName then
         notify("平铺失败", "应用未找到")
         return
     end
@@ -452,7 +390,12 @@ end
 function TileManager.restoreCurrent()
     local win = hs.window.focusedWindow()
     if win then
-        TileManager.restore(win:application():name())
+        local app = win:application()
+        if app then
+            TileManager.restore(app:name())
+        else
+            TileManager.restore(nil)
+        end
     else
         -- 如果没有聚焦窗口，尝试恢复全局布局
         TileManager.restore(nil)

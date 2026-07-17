@@ -341,43 +341,6 @@ hs.hotkey.bind(mash, ".", function()
 end)
 
 -- ============================================
--- 窗口移动（不改变大小）
--- ============================================
-
--- local moveStep = 50  -- 移动步长
-
--- -- 窗口移动（微调位置，使用 Cmd + Option + 方向键）
--- local moveKey = {"cmd", "alt"}
-
--- hs.hotkey.bind(moveKey, "left", function()
---     local win = hs.window.focusedWindow()
---     if not win then return end
---     local frame = win:frame()
---     setWinFrame(win, hs.geometry.rect(frame.x - moveStep, frame.y, frame.w, frame.h))
--- end)
-
--- hs.hotkey.bind(moveKey, "right", function()
---     local win = hs.window.focusedWindow()
---     if not win then return end
---     local frame = win:frame()
---     setWinFrame(win, hs.geometry.rect(frame.x + moveStep, frame.y, frame.w, frame.h))
--- end)
-
--- hs.hotkey.bind(moveKey, "up", function()
---     local win = hs.window.focusedWindow()
---     if not win then return end
---     local frame = win:frame()
---     setWinFrame(win, hs.geometry.rect(frame.x, frame.y - moveStep, frame.w, frame.h))
--- end)
-
--- hs.hotkey.bind(moveKey, "down", function()
---     local win = hs.window.focusedWindow()
---     if not win then return end
---     local frame = win:frame()
---     setWinFrame(win, hs.geometry.rect(frame.x, frame.y + moveStep, frame.w, frame.h))
--- end)
-
--- ============================================
 -- 调整窗口大小
 -- ============================================
 
@@ -488,6 +451,7 @@ function detectLayoutMode(win)
     if not screen then return nil end
     local max = screen:frame()
     local frame = win:frame()
+    if not frame then return nil end
     local m = getAppMargin(win)
     local area = getUsableArea(max, win)
 
@@ -615,6 +579,31 @@ end
 -- 跨显示器移动窗口（保持布局模式）
 -- ============================================
 
+-- 获取当前屏幕的下一个屏幕（按 x 坐标排序，支持 3 屏以上循环切换）
+local function getNextScreen(currentScreen)
+    local allScreens = hs.screen.allScreens()
+    if #allScreens < 2 then return nil end
+    table.sort(allScreens, function(a, b)
+        local af = a:frame()
+        local bf = b:frame()
+        return af.x < bf.x
+    end)
+
+    local currentId = currentScreen:id()
+    local found = false
+    for _, screen in ipairs(allScreens) do
+        if found then
+            return screen
+        end
+        if screen:id() == currentId then
+            found = true
+        end
+    end
+    -- 当前屏幕是最右时，回到最左
+    return allScreens[1]
+end
+
+-- 跨显示器移动窗口（保持布局模式）
 local function moveToOtherScreen()
     local win = hs.window.focusedWindow()
     if not win then return end
@@ -625,77 +614,29 @@ local function moveToOtherScreen()
         return
     end
 
-    local allScreens = hs.screen.allScreens()
-    print(string.format("[MoveScreen] 当前屏幕: %s (id=%d), 总屏幕数: %d", currentScreen:name() or "?", currentScreen:id(), #allScreens))
-
-    if #allScreens < 2 then
-        hs.alert.show("只有一个显示器", 1)
-        print("[MoveScreen] 只有一个显示器，无法移动")
-        return
-    end
-
-    -- 找到目标显示器（不是当前显示器的那个）
-    local targetScreen = nil
-    for _, screen in ipairs(allScreens) do
-        local sf = screen:frame()
-        print(string.format("[MoveScreen] 候选屏幕: %s (id=%d) frame=%s", screen:name() or "?", screen:id(), hs.inspect(sf)))
-        if screen:id() ~= currentScreen:id() then
-            targetScreen = screen
-            break
-        end
-    end
-
+    local targetScreen = getNextScreen(currentScreen)
     if not targetScreen then
-        hs.alert.show("未找到目标显示器", 1)
-        print("[MoveScreen] 未找到目标显示器")
+        hs.alert.show("只有一个显示器", 1)
         return
     end
-
-    print(string.format("[MoveScreen] 目标屏幕: %s (id=%d)", targetScreen:name() or "?", targetScreen:id()))
 
     -- 检测当前布局模式
     local mode = detectLayoutMode(win)
-    if mode then
-        print(string.format("[MoveScreen] 检测到布局模式: %s", hs.inspect(mode)))
-    else
-        print("[MoveScreen] 未检测到标准布局模式")
-    end
-
-    -- 获取当前窗口 frame 用于日志
     local oldFrame = win:frame()
-    print(string.format("[MoveScreen] 当前窗口 frame: x=%.0f y=%.0f w=%.0f h=%.0f", oldFrame.x, oldFrame.y, oldFrame.w, oldFrame.h))
 
     -- 直接用 setFrame 移动窗口到目标屏幕（moveToScreen 在某些应用上不可靠）
     if mode then
-        print("[MoveScreen] 有布局模式，直接应用目标屏幕布局")
         applyLayoutMode(win, mode, targetScreen)
     else
         -- 没有标准布局，保持原大小，将窗口中心对准目标屏幕中心
         local targetMax = targetScreen:frame()
         local newX = targetMax.x + (targetMax.w - oldFrame.w) / 2
         local newY = targetMax.y + (targetMax.h - oldFrame.h) / 2
-        print(string.format("[MoveScreen] 无布局模式，目标屏幕居中: x=%.0f y=%.0f w=%.0f h=%.0f", newX, newY, oldFrame.w, oldFrame.h))
         setWinFrame(win, hs.geometry.rect(newX, newY, oldFrame.w, oldFrame.h))
     end
 
-    -- 验证最终位置
-    local finalFrame = win:frame()
-    local finalScreen = win:screen()
-    print(string.format("[MoveScreen] 最终窗口 frame: x=%.0f y=%.0f w=%.0f h=%.0f", finalFrame.x, finalFrame.y, finalFrame.w, finalFrame.h))
-    if finalScreen then
-        print(string.format("[MoveScreen] 最终窗口所在屏幕: %s (id=%d)", finalScreen:name() or "?", finalScreen:id()))
-    end
+    print(string.format("[MoveScreen] 已移动到 %s", targetScreen:name() or "?"))
 end
-
--- Ctrl+Alt+Cmd + ↑：最大化高度（保持窗口水平位置和宽度不变）
-hs.hotkey.bind({"ctrl", "alt", "cmd"}, "up", function()
-    local win = hs.window.focusedWindow()
-    if not win then return end
-    saveWindowState(win)
-    local max = getWinScreen(win)
-    local frame = win:frame()
-    setWinFrame(win, hs.geometry.rect(frame.x, max.y, frame.w, max.h))
-end)
 
 -- Ctrl+Alt+Cmd + ↓：跨显示器移动（保持布局模式）
 hs.hotkey.bind({"ctrl", "alt", "cmd"}, "down", moveToOtherScreen)
@@ -706,8 +647,11 @@ hs.hotkey.bind({"ctrl", "alt", "cmd"}, "down", moveToOtherScreen)
 
 -- 检测窗口是否是"全高"类型（需要在新屏幕上保持全高）
 local function isFullHeightWindow(win)
-    local max = win:screen():frame()
+    local screen = win:screen()
+    if not screen then return false end
+    local max = screen:frame()
     local frame = win:frame()
+    if not frame then return false end
     local m = getAppMargin(win)
 
     -- 检测是否是左/右半屏（宽度约为 0.5、2/3、5/6，位置在左/右边缘）
@@ -733,27 +677,29 @@ local function isFullHeightWindow(win)
     return (isHalfWidth and (isLeftSide or isRightSide)) or isThirdLayout or isAlreadyFullHeight
 end
 
--- 屏幕变化监听器：自动调整窗口高度
-local screenChangeWatcher = hs.screen.watcher.new(function()
-    hs.timer.doAfter(0.5, function()
-        for _, win in ipairs(hs.window.allWindows()) do
-            if win:isStandard() then
-                local screen = win:screen()
-                if screen then
-                    local max = screen:frame()
-                    local frame = win:frame()
+-- 屏幕变化监听器：自动调整窗口高度（delayed 去抖，避免扩展坞插拔时任务叠加）
+local screenChangeTimer = hs.timer.delayed.new(0.5, function()
+    for _, win in ipairs(hs.window.allWindows()) do
+        if win:isStandard() then
+            local screen = win:screen()
+            if screen then
+                local max = screen:frame()
+                local frame = win:frame()
 
-                    -- 只处理那些看起来是"半屏/三分之一屏布局"的窗口
-                    if isFullHeightWindow(win) then
-                        -- 保持 x、w 不变，调整 y 和 h 使其填满新屏幕
-                        if not approx(frame.h, max.h, 10) or not approx(frame.y, max.y, 10) then
-                            setWinFrame(win, hs.geometry.rect(frame.x, max.y, frame.w, max.h))
-                        end
+                -- 只处理那些看起来是"半屏/三分之一屏布局"的窗口
+                if isFullHeightWindow(win) then
+                    -- 保持 x、w 不变，调整 y 和 h 使其填满新屏幕
+                    if not approx(frame.h, max.h, 10) or not approx(frame.y, max.y, 10) then
+                        setWinFrame(win, hs.geometry.rect(frame.x, max.y, frame.w, max.h))
                     end
                 end
             end
         end
-    end)
+    end
+end)
+
+local screenChangeWatcher = hs.screen.watcher.new(function()
+    screenChangeTimer:start()
 end)
 screenChangeWatcher:start()
 

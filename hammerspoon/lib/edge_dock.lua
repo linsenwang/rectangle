@@ -8,7 +8,16 @@ EdgeDock = {
     bars = {},              -- 小条 UI 元素
     mask = nil,             -- 右侧遮罩条（遮挡可能露出的窗口边缘）
     currentBarScreen = nil,  -- 当前小条所在的屏幕（用于多显示器检测）
-    config = EdgeDockConfig  -- 引用全局配置
+    config = EdgeDockConfig, -- 引用全局配置
+
+    -- 应用名到 bundle ID 的映射，避免多处重复定义
+    bundleMap = {
+        ["WeChat"] = "com.tencent.xinWeChat",
+        ["Music"] = "com.apple.Music",
+        ["ChatGPT"] = "com.openai.chat",
+        ["Safari"] = "com.apple.Safari",
+        ["Chrome"] = "com.google.Chrome",
+    }
 }
 
 -- 缓存应用颜色
@@ -175,14 +184,6 @@ function EdgeDock.getSlotPosition(slotIndex, screenFrame)
     return x, y, EdgeDock.config.barWidth, barHeight
 end
 
--- 检查点是否在槽位区域
-function EdgeDock.isPointInSlot(x, y, slotIndex)
-    local sx, sy, sw, sh = EdgeDock.getSlotPosition(slotIndex)
-    local r = EdgeDock.config.triggerRange
-    return x >= sx - r.leftExtend and x <= sx + sw + r.rightExtend
-           and y >= sy - r.topExtend and y <= sy + sh + r.bottomExtend
-end
-
 -- 检查点是否在窗口区域内（用于检测鼠标是否离开窗口）
 -- 优先使用 peek 时缓存的 lastWinFrame，避免高频 AX 调用
 function EdgeDock.isPointInWindow(mouseX, mouseY, win, slot)
@@ -300,37 +301,6 @@ function EdgeDock.validateSlot(slotIndex)
     
     -- 窗口已关闭或无法重新连接
     print(prefix .. " [VALIDATE] 槽位 " .. slotIndex .. " (" .. appName .. ") 重新连接失败")
-    return nil
-end
-
--- 轻量级验证槽位（用于鼠标交互，非阻塞）
-function EdgeDock.quickValidateSlot(slotIndex)
-    local slot = EdgeDock.slots[slotIndex]
-    if not slot then return nil end
-    
-    local prefix = EdgeDock.logPrefix()
-    local oldWinId = slot.winId
-    
-    -- 尝试通过 winId 获取窗口对象
-    if slot.winId then
-        local win = hs.window.get(slot.winId)
-        if win then
-            slot.win = win
-            return slot
-        end
-    end
-    
-    -- winId 失效，尝试重新连接
-    print(prefix .. " [QUICK_VALIDATE] 槽位 " .. slotIndex .. " (" .. (slot.appName or "unknown") .. ") winId=" .. tostring(oldWinId) .. " 失效，尝试重新连接...")
-    local reconnectedWin = EdgeDock.tryReconnect(slot)
-    if reconnectedWin then
-        local newWinId = reconnectedWin:id()
-        print(prefix .. " [QUICK_VALIDATE] 槽位 " .. slotIndex .. " 重新连接成功，新winId=" .. tostring(newWinId))
-        slot.win = reconnectedWin
-        slot.winId = newWinId
-        return slot
-    end
-    
     return nil
 end
 
@@ -558,10 +528,13 @@ function EdgeDock.saveState()
         ::continue::
     end
     
-    local file = io.open(EDGEDOCK_STATE_FILE, "w")
+    -- 原子写入：先写 *.tmp，再 rename，避免写入中途崩溃留下半个 JSON
+    local tmpFile = EDGEDOCK_STATE_FILE .. ".tmp"
+    local file = io.open(tmpFile, "w")
     if file then
         file:write(hs.json.encode(state))
         file:close()
+        os.rename(tmpFile, EDGEDOCK_STATE_FILE)
         print(prefix .. " [SAVE_STATE] 完成: " .. #state .. " 个窗口已保存到 " .. EDGEDOCK_STATE_FILE)
         -- 打印详细保存信息
         for _, item in ipairs(state) do
@@ -585,10 +558,10 @@ function EdgeDock.restoreState()
     
     local content = file:read("*all")
     file:close()
-    
-    local state = hs.json.decode(content)
-    if not state or #state == 0 then
-        print(prefix .. " [RESTORE_STATE] 状态文件为空")
+
+    local ok, state = pcall(function() return hs.json.decode(content) end)
+    if not ok or type(state) ~= "table" or #state == 0 then
+        print(prefix .. " [RESTORE_STATE] 状态文件解析失败或为空")
         -- 标记启动完成
         EdgeDock._startupComplete = true
         return
@@ -773,73 +746,6 @@ function EdgeDock.restoreState()
 end
 
 -- 高亮小条（拖拽提示）
-function EdgeDock.highlightBar(slotIndex, highlight)
-    local bar = EdgeDock.bars[slotIndex]
-    if not bar or not bar.canvas then return end
-    
-    local slot = EdgeDock.slots[slotIndex]
-    -- 获取当前屏幕和槽位高度
-    local screen = EdgeDock.getCurrentScreen()
-    local barHeight = EdgeDock.getBarHeight(screen)
-    local w, h = EdgeDock.config.barWidth, barHeight
-    
-    -- 更新小条位置
-    local x, y = EdgeDock.getSlotPosition(slotIndex, screen)
-    bar.canvas:frame({x = x, y = y, w = w, h = h})
-    
-    -- 获取当前模式的颜色
-    local colors = EdgeDock.getCurrentColors()
-    
-    -- 清除并重绘
-    bar.canvas:removeElement(1)
-    bar.canvas:removeElement(1)
-    
-    if highlight then
-        -- 高亮状态 - 使用当前模式的颜色
-        bar.canvas:appendElements({
-            type = "rectangle",
-            action = "fill",
-            fillColor = slot and colors.highlightOccupied or colors.highlightEmpty,
-            roundedRectRadii = {xRadius = 4, yRadius = 4},
-        })
-    else
-        -- 正常状态
-        if slot then
-            bar.canvas:appendElements({
-                type = "rectangle",
-                action = "fill",
-                fillColor = {alpha = 0.5, red = 1, green = 1, blue = 1},
-                roundedRectRadii = {xRadius = 4, yRadius = 4},
-            })
-        else
-            bar.canvas:appendElements({
-                type = "rectangle",
-                action = "fill",
-                fillColor = colors.emptyBar,
-                roundedRectRadii = {xRadius = 4, yRadius = 4},
-            })
-        end
-    end
-    
-    -- 文字
-    bar.canvas:appendElements({
-        type = "text",
-        text = slot and string.upper(string.sub(slot.appName, 1, 1)) or tostring(slotIndex),
-        textSize = 14,
-        textColor = highlight and colors.highlightText
-                            or (slot and colors.normalOccupiedText or colors.emptyText),
-        frame = {x = 0, y = h/2 - 10, w = w, h = 20},
-        textAlignment = "center",
-    })
-end
-
--- 清除所有高亮
-function EdgeDock.clearAllHighlights()
-    for i = 1, EdgeDock.config.maxSlots do
-        EdgeDock.highlightBar(i, false)
-    end
-end
-
 -- 将窗口停靠到槽位
 -- @param win 窗口对象
 -- @param slotIndex 槽位索引
@@ -958,14 +864,7 @@ function EdgeDock.tryReconnect(slot)
     
     -- 方法3: 尝试通过 bundle ID 查找
     if not app then
-        local bundleMap = {
-            ["WeChat"] = "com.tencent.xinWeChat",
-            ["Music"] = "com.apple.Music",
-            ["ChatGPT"] = "com.openai.chat",
-            ["Safari"] = "com.apple.Safari",
-            ["Chrome"] = "com.google.Chrome",
-        }
-        local bundleID = bundleMap[slot.appName]
+        local bundleID = EdgeDock.bundleMap[slot.appName]
         if bundleID then
             app = hs.application.get(bundleID)
         end
@@ -1203,14 +1102,7 @@ function EdgeDock.clearSlot(slotIndex)
     if not win and slot.appName and slot.winTitle and slot.winTitle ~= "" then
         local app = hs.application.get(slot.appName)
         if not app then
-            local bundleMap = {
-                ["WeChat"] = "com.tencent.xinWeChat",
-                ["Music"] = "com.apple.Music",
-                ["ChatGPT"] = "com.openai.chat",
-                ["Safari"] = "com.apple.Safari",
-                ["Chrome"] = "com.google.Chrome",
-            }
-            local bundleID = bundleMap[slot.appName]
+            local bundleID = EdgeDock.bundleMap[slot.appName]
             if bundleID then
                 app = hs.application.get(bundleID)
             end
@@ -1381,33 +1273,39 @@ function EdgeDock.hideWindow(slotIndex)
 end
 
 -- 完全恢复窗口
-function EdgeDock.undockWindow(slotIndex, focus)
+-- options: { suppressNotify = true, suppressSave = true, suppressRefresh = true }
+function EdgeDock.undockWindow(slotIndex, focus, options)
     focus = focus ~= false  -- 默认 true
+    options = options or {}
     local slot = EdgeDock.slots[slotIndex]
     if not slot then return end
-    
+
     if slot.hideTimer then
         slot.hideTimer:stop()
     end
-    
+
     -- 尝试获取窗口
     local win = slot.win
     if not win and slot.winId then
         win = hs.window.get(slot.winId)
     end
-    
+
     if win then
         setWinFrame(win, slot.originalFrame)
         if focus then win:focus() end
     else
         print("[EdgeDock] 恢复时窗口已失效: " .. (slot.appName or "unknown"))
     end
-    
+
     EdgeDock.slots[slotIndex] = nil
-    EdgeDock.refreshBars()
-    EdgeDock.saveState()
-    
-    if focus then
+    if not options.suppressRefresh then
+        EdgeDock.refreshBars()
+    end
+    if not options.suppressSave then
+        EdgeDock.saveState()
+    end
+
+    if focus and not options.suppressNotify then
         notify("Edge Dock", "窗口已恢复")
     end
 end
@@ -1480,15 +1378,17 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
                 local win = slot.win
                 if win then
                     local currentFrame = win:frame()
-                    -- 如果窗口不在贴边位置（靠右），可能被居中了
-                    local showX = screen.x + screen.w - slot.originalFrame.w
-                    if math.abs(currentFrame.x - showX) > 100 then
-                        -- 窗口位置偏离贴边位置超过100像素，可能是被居中了
-                        -- 检查是否确实在屏幕中央附近
-                        if EdgeDock.isWindowCentered(win, screen) then
-                            slot.centeredPaused = true
-                            slot.wasMouseInWindow = false  -- 重置鼠标状态
-                            print(string.format("[EdgeDock] 槽位%d: 检测到窗口被居中，暂停移出检测", i))
+                    if currentFrame then
+                        -- 如果窗口不在贴边位置（靠右），可能被居中了
+                        local showX = screen.x + screen.w - slot.originalFrame.w
+                        if math.abs(currentFrame.x - showX) > 100 then
+                            -- 窗口位置偏离贴边位置超过100像素，可能是被居中了
+                            -- 检查是否确实在屏幕中央附近
+                            if EdgeDock.isWindowCentered(win, screen) then
+                                slot.centeredPaused = true
+                                slot.wasMouseInWindow = false  -- 重置鼠标状态
+                                print(string.format("[EdgeDock] 槽位%d: 检测到窗口被居中，暂停移出检测", i))
+                            end
                         end
                     end
                 end
@@ -1503,12 +1403,14 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
                     local win = slot.win
                     if win then
                         local currentFrame = win:frame()
-                        -- 检查窗口是否在贴边位置（靠右）
-                        local showX = screen.x + screen.w - slot.originalFrame.w
-                        -- 如果窗口在贴边位置（非居中），才恢复检测
-                        if math.abs(currentFrame.x - showX) <= 100 then
-                            slot.centeredPaused = false
-                            print(string.format("[EdgeDock] 槽位%d: 鼠标进入贴边窗口，恢复移出检测", i))
+                        if currentFrame then
+                            -- 检查窗口是否在贴边位置（靠右）
+                            local showX = screen.x + screen.w - slot.originalFrame.w
+                            -- 如果窗口在贴边位置（非居中），才恢复检测
+                            if math.abs(currentFrame.x - showX) <= 100 then
+                                slot.centeredPaused = false
+                                print(string.format("[EdgeDock] 槽位%d: 鼠标进入贴边窗口，恢复移出检测", i))
+                            end
                         end
                     end
                 end
@@ -1723,7 +1625,7 @@ function EdgeDock.recoverHiddenWindows()
             if winScreenFrame then
                 local rightEdge = winScreenFrame.x + winScreenFrame.w
                 -- 如果窗口在屏幕右侧外（被藏起来了），把它拉回来
-                -- 扩大检测范围：从 rightEdge-50 到 rightEdge+100，支持 peekWidth=0 的情况
+                -- 扩大检测范围：从 rightEdge-50 到 rightEdge+100
                 if frame.x >= rightEdge - 50 and frame.x <= rightEdge + 100 then
                     -- 窗口被藏在右边，恢复到屏幕内（居中），保持原始尺寸
                     local newX = winScreenFrame.x + (winScreenFrame.w - frame.w) / 2
@@ -1792,14 +1694,7 @@ function EdgeDock.start()
                 local app = hs.application.get(slot.appName)
                 if not app then
                     -- 应用已关闭，尝试通过 bundle ID 查找
-                    local bundleMap = {
-                        ["WeChat"] = "com.tencent.xinWeChat",
-                        ["Music"] = "com.apple.Music",
-                        ["ChatGPT"] = "com.openai.chat",
-                        ["Safari"] = "com.apple.Safari",
-                        ["Chrome"] = "com.google.Chrome",
-                    }
-                    local bundleID = bundleMap[slot.appName]
+                    local bundleID = EdgeDock.bundleMap[slot.appName]
                     if bundleID then
                         app = hs.application.get(bundleID)
                     end
@@ -1882,11 +1777,22 @@ end
 
 -- 停止
 function EdgeDock.stop()
+    -- 批量恢复窗口，避免逐个聚焦、通知、写文件
     for i = 1, EdgeDock.config.maxSlots do
         if EdgeDock.slots[i] then
-            EdgeDock.undockWindow(i)
+            EdgeDock.undockWindow(i, false, { suppressNotify = true, suppressSave = true, suppressRefresh = true })
         end
     end
+
+    -- 清理小条 canvas，防止内存泄漏
+    for _, bar in ipairs(EdgeDock.bars) do
+        if bar and bar.canvas then
+            bar.canvas:delete()
+        end
+    end
+    EdgeDock.bars = {}
+    EdgeDock.currentBarScreen = nil
+
     if EdgeDock.mask then
         EdgeDock.mask:delete()
         EdgeDock.mask = nil

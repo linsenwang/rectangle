@@ -75,9 +75,7 @@ EdgeDockConfig = {
     bottomMargin = 6,   -- 底部边距（距离屏幕下边缘）
     barGap = 10,        -- 小条之间的空隙（像素）
     barRightOffset = 3, -- 小条距离屏幕右边缘的偏移（像素）
-    peekWidth = 1,      -- 窗口 peek 出来的宽度（像素）
     hideDelay = 0,      -- 鼠标离开后多久收起（秒），0表示立即收起
-    centeredPause = true,  -- 居中后暂停鼠标移出检测
     showMask = false,      -- 是否显示右侧遮罩条（遮挡窗口边缘露出的一小角）
     
     -- 鼠标触发范围配置（像素）
@@ -178,16 +176,6 @@ AutoDockConfig = {
 DisplayLayoutConfig = {
     -- 状态文件路径（相对于 CONFIG_PATH）
     stateFile = "display_layouts.json",
-    
-    -- 是否启用自动保存（当显示器断开时）
-    -- 注意：当前版本默认禁用，使用手动保存 (⌃⌥⇧ D)
-    autoSaveOnDisconnect = false,
-    
-    -- 是否启用自动恢复（当显示器连接时）
-    autoRestoreOnConnect = true,
-    
-    -- 恢复延迟（秒）- 等待显示器完全初始化
-    restoreDelay = 1.5,
 }
 
 -- ============================================
@@ -475,15 +463,19 @@ print("[Config] hs.window.focusedWindow 已补丁：优先使用前台应用的 
 -- 快速设置窗口 frame（无动画，解决 AXEnhancedUserInterface 问题）
 function setWinFrame(win, rect)
     if not win or not win.isStandard or not win:isStandard() then return end
-    
+
     local axApp = hs.axuielement.applicationElement(win:application())
     local wasEnhanced = axApp.AXEnhancedUserInterface
     if wasEnhanced then
         axApp.AXEnhancedUserInterface = false
     end
-    
-    win:setFrame(rect, 0)
-    
+
+    -- 用 pcall 包裹 setFrame，出错时仍然恢复 AXEnhancedUserInterface
+    local ok, err = pcall(function() win:setFrame(rect, 0) end)
+    if not ok then
+        print("[setWinFrame] 设置窗口 frame 失败: " .. tostring(err))
+    end
+
     if wasEnhanced then
         axApp.AXEnhancedUserInterface = true
     end
@@ -493,6 +485,7 @@ end
 function getWinScreen(win)
     if not win then return nil, nil end
     local screen = win:screen()
+    if not screen then return nil, nil end
     return screen:frame(), screen
 end
 
@@ -525,9 +518,44 @@ function restoreWindow(win)
     if id and windowHistory[id] then
         setWinFrame(win, windowHistory[id])
         windowHistory[id] = nil
-        cycleState[id] = nil  -- 清除循环状态
+        cycleState[id] = nil       -- 清除循环状态
+        thirdCycleState[id] = nil  -- 清除三分屏循环状态
     end
 end
+
+-- 清理已关闭窗口的状态，避免长会话内存无限累积
+function cleanupWindowState()
+    local allWindows = hs.window.allWindows()
+    local validIds = {}
+    for _, win in ipairs(allWindows) do
+        local id = win:id()
+        if id then
+            validIds[id] = true
+        end
+    end
+
+    local function prune(tbl, name)
+        local before = 0
+        for _ in pairs(tbl) do before = before + 1 end
+        for id in pairs(tbl) do
+            if not validIds[id] then
+                tbl[id] = nil
+            end
+        end
+        local after = 0
+        for _ in pairs(tbl) do after = after + 1 end
+        if before ~= after then
+            print(string.format("[Config] 清理 %s: %d -> %d", name, before, after))
+        end
+    end
+
+    prune(windowHistory, "windowHistory")
+    prune(cycleState, "cycleState")
+    prune(thirdCycleState, "thirdCycleState")
+end
+
+-- 每 60 秒清理一次历史状态
+hs.timer.doEvery(60, cleanupWindowState)
 
 -- 辅助函数：检查值是否在范围内
 function approx(a, b, tolerance)

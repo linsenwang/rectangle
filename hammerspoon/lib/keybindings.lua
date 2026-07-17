@@ -32,8 +32,6 @@ local themes = {
 local function currentThemeName()
     -- 方法1：Hammerspoon 原生 API
     local style = hs.host.interfaceStyle()
-    print("[KeyBindings] hs.host.interfaceStyle() = " .. tostring(style))
-
     if style == "Light" then
         return "light"
     elseif style == "Dark" then
@@ -46,7 +44,6 @@ local function currentThemeName()
     end)
     if ok and result then
         result = string.lower(string.gsub(result, "%s+", ""))
-        print("[KeyBindings] defaults AppleInterfaceStyle = '" .. tostring(result) .. "'")
         if result == "dark" then
             return "dark"
         end
