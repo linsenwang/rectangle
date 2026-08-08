@@ -77,6 +77,9 @@ EdgeDockConfig = {
     barRightOffset = 3, -- 小条距离屏幕右边缘的偏移（像素）
     hideDelay = 0,      -- 鼠标离开后多久收起（秒），0表示立即收起
     showMask = false,      -- 是否显示右侧遮罩条（遮挡窗口边缘露出的一小角）
+    saveWindowSize = false, -- 是否保存/强制恢复窗口大小
+                            -- false（默认）：不锁定窗口大小，预览时可自由调整大小，解除停靠时保留当前大小
+                            -- true：停靠时锁定窗口大小，预览/隐藏/解除停靠都使用停靠时的尺寸
     
     -- 鼠标触发范围配置（像素）
     triggerRange = {

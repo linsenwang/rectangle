@@ -166,6 +166,29 @@ function EdgeDock.getSlotScreenFrame(slot)
     return EdgeDock.getCurrentScreen()
 end
 
+-- 获取槽位窗口当前应使用的尺寸（宽/高）
+-- saveWindowSize=true  : 始终使用停靠时保存的尺寸
+-- saveWindowSize=false : 优先使用最近一次在屏幕上观察到的尺寸（允许用户调整窗口大小）
+function EdgeDock.getSlotSize(slot)
+    if not slot or not slot.originalFrame then return 0, 0 end
+    if EdgeDock.config.saveWindowSize then
+        return slot.originalFrame.w, slot.originalFrame.h
+    end
+    -- 优先使用最近一次在屏幕上观察到的尺寸（窗口被隐藏到屏幕外后 win:frame() 尺寸可能不准）
+    if slot.currentSize and slot.currentSize.w > 0 and slot.currentSize.h > 0 then
+        return slot.currentSize.w, slot.currentSize.h
+    end
+    -- 兜底：读取窗口当前 frame（窗口在屏幕上时尺寸准确）
+    local win = slot.win or (slot.winId and hs.window.get(slot.winId))
+    if win then
+        local f = win:frame()
+        if f and f.w > 0 and f.h > 0 then
+            return f.w, f.h
+        end
+    end
+    return slot.originalFrame.w, slot.originalFrame.h
+end
+
 -- 计算小条高度（根据屏幕高度自动分配）
 function EdgeDock.getBarHeight(screenFrame)
     local screen = screenFrame or EdgeDock.getCurrentScreen()
@@ -672,6 +695,15 @@ function EdgeDock.restoreState()
                             item.originalFrame.h
                         )
 
+                        -- 不保存大小时，使用窗口当前尺寸（允许用户调整窗口大小）
+                        local effW, effH = frame.w, frame.h
+                        if not EdgeDock.config.saveWindowSize then
+                            local liveFrame = targetWin:frame()
+                            if liveFrame and liveFrame.w > 0 and liveFrame.h > 0 then
+                                effW, effH = liveFrame.w, liveFrame.h
+                            end
+                        end
+
                         -- 使用槽位记录的屏幕，避免启动时小条/窗口被放到错误显示器
                         local screen = EdgeDock.getSlotScreenFrame(item)
 
@@ -679,12 +711,12 @@ function EdgeDock.restoreState()
                         local sx, sy, sw, sh = EdgeDock.getSlotPosition(item.slotIndex, screen)
 
                         -- 计算窗口在槽位区域内的垂直居中位置
-                        local winY = sy + (sh - frame.h) / 2
+                        local winY = sy + (sh - effH) / 2
                         if winY < screen.y then
                             winY = screen.y
                         end
-                        if winY + frame.h > screen.y + screen.h then
-                            winY = screen.y + screen.h - frame.h
+                        if winY + effH > screen.y + screen.h then
+                            winY = screen.y + screen.h - effH
                         end
 
                         -- 保存到槽位
@@ -692,6 +724,7 @@ function EdgeDock.restoreState()
                             win = targetWin,
                             winId = targetWin:id(),
                             originalFrame = frame,
+                            currentSize = {w = effW, h = effH},  -- 记录当前尺寸（saveWindowSize=false 时使用）
                             appName = item.appName,
                             isShowing = false,
                             hideTimer = nil,
@@ -704,7 +737,7 @@ function EdgeDock.restoreState()
                         -- 隐藏窗口到屏幕右下角
                         local hideX = screen.x + screen.w - 1
                         local hideY = screen.y + screen.h - 1
-                        setWinFrame(targetWin, hs.geometry.rect(hideX, hideY, frame.w, frame.h))
+                        setWinFrame(targetWin, hs.geometry.rect(hideX, hideY, effW, effH))
 
                         restoredCount = restoredCount + 1
                     else
@@ -807,6 +840,7 @@ function EdgeDock.dockWindow(win, slotIndex, options)
         winId = win:id(),
         winTitle = win:title() or "",  -- 保存窗口标题用于恢复时匹配
         originalFrame = frame,
+        currentSize = {w = frame.w, h = frame.h},  -- 记录停靠时的尺寸（saveWindowSize=false 时用于允许用户调整大小）
         appName = app and app:name() or "?",
         isShowing = shouldShow,
         hideTimer = nil,
@@ -1119,7 +1153,13 @@ function EdgeDock.clearSlot(slotIndex)
 
     if win and slot.originalFrame then
         print(prefix .. " [CLEAR_SLOT] 槽位 " .. slotIndex .. " (" .. (slot.appName or "unknown") .. ") 窗口仍存在，恢复到原位置")
-        setWinFrame(win, slot.originalFrame)
+        local restoreFrame = slot.originalFrame
+        -- 不保存大小时，只恢复位置，保留当前（用户调整过的）大小
+        if not EdgeDock.config.saveWindowSize then
+            local winW, winH = EdgeDock.getSlotSize(slot)
+            restoreFrame = hs.geometry.rect(slot.originalFrame.x, slot.originalFrame.y, winW, winH)
+        end
+        setWinFrame(win, restoreFrame)
     else
         print(prefix .. " [CLEAR_SLOT] 槽位 " .. slotIndex .. " (" .. (slot.appName or "unknown") .. ") 窗口已不存在，直接清理")
     end
@@ -1204,20 +1244,20 @@ function EdgeDock.peekWindow(slotIndex)
         slot.slotY = sy
         slot.slotHeight = sh
         
+        -- 获取窗口当前应使用的尺寸（saveWindowSize=false 时跟随用户调整）
+        local winW, winH = EdgeDock.getSlotSize(slot)
+
         -- 重新计算窗口在槽位区域内的垂直居中位置
-        local winY = sy + (sh - slot.originalFrame.h) / 2
+        local winY = sy + (sh - winH) / 2
         if winY < screen.y then
             winY = screen.y
         end
-        if winY + slot.originalFrame.h > screen.y + screen.h then
-            winY = screen.y + screen.h - slot.originalFrame.h
+        if winY + winH > screen.y + screen.h then
+            winY = screen.y + screen.h - winH
         end
         slot.winY = winY
         
-        -- 使用 originalFrame 的尺寸（窗口在屏幕外时 win:frame() 可能返回错误值）
-        local winW = slot.originalFrame.w
-        local winH = slot.originalFrame.h
-        -- 靠右显示，保持大小不变，y 坐标垂直居中于槽位
+        -- 靠右显示，保持当前大小不变，y 坐标垂直居中于槽位
         local showX = screen.x + screen.w - winW
         
         setWinFrame(win, hs.geometry.rect(showX, slot.winY, winW, winH))
@@ -1258,12 +1298,20 @@ function EdgeDock.hideWindow(slotIndex)
     
     -- 如果找到窗口，移动它
     if win then
+        -- 窗口正在屏幕上显示时，记录用户调整后的尺寸（saveWindowSize=false 时使用）
+        if slot.isShowing then
+            local liveFrame = win:frame()
+            if liveFrame and liveFrame.w > 0 and liveFrame.h > 0 then
+                slot.currentSize = {w = liveFrame.w, h = liveFrame.h}
+            end
+        end
         -- 使用槽位绑定的屏幕，避免异步 hide 时跟随鼠标切屏
         local screen = EdgeDock.getSlotScreenFrame(slot)
-        -- 移到屏幕右下角（只露出1x1像素，保持原尺寸）
+        -- 移到屏幕右下角（只露出1x1像素，保持当前尺寸）
+        local winW, winH = EdgeDock.getSlotSize(slot)
         local hideX = screen.x + screen.w - 1
         local hideY = screen.y + screen.h - 1
-        setWinFrame(win, hs.geometry.rect(hideX, hideY, slot.originalFrame.w, slot.originalFrame.h))
+        setWinFrame(win, hs.geometry.rect(hideX, hideY, winW, winH))
         slot.win = win
     end
     
@@ -1291,7 +1339,13 @@ function EdgeDock.undockWindow(slotIndex, focus, options)
     end
 
     if win then
-        setWinFrame(win, slot.originalFrame)
+        local restoreFrame = slot.originalFrame
+        -- 不保存大小时，只恢复位置，保留当前（用户调整过的）大小
+        if not EdgeDock.config.saveWindowSize then
+            local winW, winH = EdgeDock.getSlotSize(slot)
+            restoreFrame = hs.geometry.rect(slot.originalFrame.x, slot.originalFrame.y, winW, winH)
+        end
+        setWinFrame(win, restoreFrame)
         if focus then win:focus() end
     else
         print("[EdgeDock] 恢复时窗口已失效: " .. (slot.appName or "unknown"))
@@ -1379,8 +1433,13 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
                 if win then
                     local currentFrame = win:frame()
                     if currentFrame then
+                        -- 记录窗口当前尺寸（saveWindowSize=false 时允许用户调整大小）
+                        if not EdgeDock.config.saveWindowSize and currentFrame.w > 0 and currentFrame.h > 0 then
+                            slot.currentSize = {w = currentFrame.w, h = currentFrame.h}
+                        end
                         -- 如果窗口不在贴边位置（靠右），可能被居中了
-                        local showX = screen.x + screen.w - slot.originalFrame.w
+                        local winW = EdgeDock.getSlotSize(slot)
+                        local showX = screen.x + screen.w - winW
                         if math.abs(currentFrame.x - showX) > 100 then
                             -- 窗口位置偏离贴边位置超过100像素，可能是被居中了
                             -- 检查是否确实在屏幕中央附近
@@ -1405,7 +1464,8 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
                         local currentFrame = win:frame()
                         if currentFrame then
                             -- 检查窗口是否在贴边位置（靠右）
-                            local showX = screen.x + screen.w - slot.originalFrame.w
+                            local winW = EdgeDock.getSlotSize(slot)
+                            local showX = screen.x + screen.w - winW
                             -- 如果窗口在贴边位置（非居中），才恢复检测
                             if math.abs(currentFrame.x - showX) <= 100 then
                                 slot.centeredPaused = false
