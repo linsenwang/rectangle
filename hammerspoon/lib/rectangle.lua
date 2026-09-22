@@ -710,9 +710,13 @@ screenChangeWatcher:start()
 local previousFocusedWindow = nil
 local currentFocusedWindow = nil
 
--- 监听焦点变化，记录上一个焦点窗口
+-- 监听焦点变化，记录上一个焦点窗口，并让 focusedWindow 缓存失效
 local swapFilter = hs.window.filter.new(true)
 swapFilter:subscribe(hs.window.filter.windowFocused, function(win)
+    -- 焦点变化时使 hs.window.focusedWindow 缓存失效（定义于 config.lua）
+    if _G.invalidateFocusedWindowCache then
+        _G.invalidateFocusedWindowCache()
+    end
     if win and win ~= currentFocusedWindow then
         previousFocusedWindow = currentFocusedWindow
         currentFocusedWindow = win

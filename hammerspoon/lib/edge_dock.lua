@@ -1377,10 +1377,12 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
     local mousePos = e:location()
     -- 使用当前鼠标所在的屏幕（支持多显示器）
     local screen = EdgeDock.getCurrentScreen()
-    
+    local r = EdgeDock.config.triggerRange
+    local maxSlots = EdgeDock.config.maxSlots
+
     -- 检测屏幕变化，如果鼠标移动到了不同屏幕，重新定位小条
+    local screenId = screen.x .. "," .. screen.y .. "," .. screen.w .. "," .. screen.h
     if EdgeDock.currentBarScreen then
-        local screenId = screen.x .. "," .. screen.y .. "," .. screen.w .. "," .. screen.h
         if EdgeDock.currentBarScreen ~= screenId then
             -- 屏幕变化，重新定位小条和遮罩
             EdgeDock.currentBarScreen = screenId
@@ -1388,7 +1390,7 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
             EdgeDock.refreshMask()
             -- 如果有正在显示的窗口，先隐藏它（避免窗口留在旧屏幕）
             -- 但处于居中暂停状态的窗口保持显示
-            for i = 1, EdgeDock.config.maxSlots do
+            for i = 1, maxSlots do
                 local slot = EdgeDock.slots[i]
                 if slot and slot.isShowing and not slot.centeredPaused then
                     EdgeDock.hideWindow(i)
@@ -1397,35 +1399,41 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
         end
     else
         -- 初始化当前屏幕
-        EdgeDock.currentBarScreen = screen.x .. "," .. screen.y .. "," .. screen.w .. "," .. screen.h
+        EdgeDock.currentBarScreen = screenId
     end
-    
+
+    -- 每个事件只计算一次槽位几何（原先每个槽位每次事件重复计算 getSlotPosition/getBarHeight）
+    local barHeight = EdgeDock.getBarHeight(screen)
+    local startY = screen.y + EdgeDock.config.topMargin
+    local slotX = screen.x + screen.w - EdgeDock.config.barWidth - (EdgeDock.config.barRightOffset or 5)
+    local slotY = {}
+    for i = 1, maxSlots do
+        slotY[i] = startY + (i - 1) * (barHeight + EdgeDock.config.barGap)
+    end
     local rightEdge = screen.x + screen.w
-    
+
     -- 悬停检测
-    for i = 1, EdgeDock.config.maxSlots do
+    for i = 1, maxSlots do
         local slot = EdgeDock.slots[i]
         if not slot then goto continue end
-        
-        local sx, sy, sw, sh = EdgeDock.getSlotPosition(i, screen)
+
+        local sy = slotY[i]
         -- 扩大检测区域：屏幕右边缘附近都能触发
-        local r = EdgeDock.config.triggerRange
-        local inSlotArea = mousePos.x >= sx - r.leftExtend and mousePos.x <= rightEdge + r.rightExtend
-                          and mousePos.y >= sy - r.topExtend and mousePos.y <= sy + sh + r.bottomExtend
-        
+        local inSlotArea = mousePos.x >= slotX - r.leftExtend and mousePos.x <= rightEdge + r.rightExtend
+                          and mousePos.y >= sy - r.topExtend and mousePos.y <= sy + barHeight + r.bottomExtend
+
         -- 检测是否在槽位区域 - 显示窗口
         if inSlotArea and not slot.isShowing then
             EdgeDock.peekWindow(i)
         end
-        
+
         -- 检测是否离开窗口区域 - 启动隐藏计时器
         if slot.isShowing then
             local inWindow = EdgeDock.isPointInWindow(mousePos.x, mousePos.y, slot.win, slot)
             -- 扩大槽位检测区域（使用配置参数）
-            local r = EdgeDock.config.triggerRange
-            local inSlot = mousePos.x >= sx - r.leftExtend - 10 and mousePos.x <= rightEdge + r.rightExtend + 5
-                          and mousePos.y >= sy - r.topExtend - 5 and mousePos.y <= sy + sh + r.bottomExtend + 5
-            
+            local inSlot = mousePos.x >= slotX - r.leftExtend - 10 and mousePos.x <= rightEdge + r.rightExtend + 5
+                          and mousePos.y >= sy - r.topExtend - 5 and mousePos.y <= sy + barHeight + r.bottomExtend + 5
+
             -- 检测窗口是否被居中（用户手动居中后需要暂停移出检测）
             -- 节流：约 200ms 检查一次，避免高频 AX 调用
             if checkFrame and not slot.centeredPaused then
@@ -1452,7 +1460,7 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
                     end
                 end
             end
-            
+
             -- 检测鼠标是否进入窗口（从外部移到内部）
             local wasInWindow = slot.wasMouseInWindow or false
             if inWindow and not wasInWindow then
@@ -1476,7 +1484,7 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
                 end
             end
             slot.wasMouseInWindow = inWindow
-            
+
             -- 既不在窗口内，也不在槽位上
             if not inWindow and not inSlot then
                 -- 如果处于居中暂停状态，不隐藏窗口
@@ -1503,10 +1511,10 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
                 end
             end
         end
-        
+
         ::continue::
     end
-    
+
     return false  -- 不拦截事件
 end)
 

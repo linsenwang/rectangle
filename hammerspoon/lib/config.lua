@@ -35,6 +35,7 @@ margin = {
 appMargins = {
     -- 示例：Chrome 有侧栏，左边距更大
     ["Google Chrome"] = { left = 11, right = 11, inner = 40 },
+    ["NetNewsWire"] = { left = 0, right = 60, inner = 40 },
     -- ["Chrome"] = { left = 80, right = 11, inner = 40 },
     -- ["Safari"] = { left = 20, right = 11, inner = 40 },
     ["Code"] = { left = 11, right = 11, inner = 40 },
@@ -45,11 +46,11 @@ appMargins = {
 displayMargins = {
     -- 示例：内置显示器（Retina 屏幕）
     -- ["Built-in Retina Display"] = { left = 11, right = 11, inner = 40 },
-    
+
     -- 示例：特定外接显示器（通过名称匹配）
     -- ["DELL U2723QE"] = { left = 20, right = 20, inner = 50 },
     -- ["LG ULTRAWIDE"] = { left = 30, right = 30, inner = 60 },
-    
+
     -- 示例：通过屏幕ID匹配（使用 screen_ID 格式）
     -- ["screen_69731840"] = { left = 15, right = 15, inner = 45 },
 }
@@ -80,7 +81,7 @@ EdgeDockConfig = {
     saveWindowSize = false, -- 是否保存/强制恢复窗口大小
                             -- false（默认）：不锁定窗口大小，预览时可自由调整大小，解除停靠时保留当前大小
                             -- true：停靠时锁定窗口大小，预览/隐藏/解除停靠都使用停靠时的尺寸
-    
+
     -- 鼠标触发范围配置（像素）
     triggerRange = {
         leftExtend = 7,   -- 槽位左侧向左扩展的触发范围
@@ -88,7 +89,7 @@ EdgeDockConfig = {
         topExtend = 5,    -- 槽位顶部向上扩展的触发范围
         bottomExtend = 5, -- 槽位底部向下扩展的触发范围
     },
-    
+
     -- 深色/浅色模式颜色配置
     colors = {
         dark = {
@@ -110,7 +111,7 @@ EdgeDockConfig = {
             mask = {alpha = 1, red = 0, green = 0, blue = 0},                   -- 遮罩条颜色
         }
     },
-    
+
     -- 已知应用颜色表（支持深色/浅色模式）
     -- 如果不指定某个模式，则回退到另一个模式
     knownAppColors = {
@@ -198,14 +199,13 @@ function getScreenIdentifier(screen)
 end
 
 -- 获取边距配置（综合考虑应用和显示器）
-function getAppMargin(win)
-    if not win then return margin end
-    
+-- 内部实现：实际查询逻辑
+local function computeAppMargin(win)
     local app = win:application()
     local appName = app and app:name() or nil
     local screen = win:screen()
     local screenId = getScreenIdentifier(screen)
-    
+
     -- 1. 优先检查应用+显示器组合配置
     if appName and screenId and appDisplayMargins[appName] then
         local displayConfig = appDisplayMargins[appName]
@@ -227,7 +227,7 @@ function getAppMargin(win)
             end
         end
     end
-    
+
     -- 2. 检查应用特定配置
     if appName then
         if appMargins[appName] then
@@ -240,7 +240,7 @@ function getAppMargin(win)
             end
         end
     end
-    
+
     -- 3. 检查显示器特定配置
     if screenId then
         if displayMargins[screenId] then
@@ -260,9 +260,33 @@ function getAppMargin(win)
             end
         end
     end
-    
+
     -- 4. 返回默认配置
     return margin
+end
+
+-- 边距查询缓存：同一窗口在一次快捷键处理中会被多次查询（getUsableArea / detectLayoutMode 等），
+-- 短 TTL 缓存避免重复的 win:application() / screen:name() 桥接调用
+local marginCache = {}       -- key: winId -> { time = number, margin = table }
+local MARGIN_CACHE_TTL = 1.0 -- 秒
+
+function getAppMargin(win)
+    if not win then return margin end
+
+    local wid = win:id()
+    local now = hs.timer.secondsSinceEpoch()
+    if wid then
+        local cached = marginCache[wid]
+        if cached and now - cached.time < MARGIN_CACHE_TTL then
+            return cached.margin
+        end
+    end
+
+    local result = computeAppMargin(win)
+    if wid then
+        marginCache[wid] = { time = now, margin = result }
+    end
+    return result
 end
 
 -- 计算屏幕可用区域（扣除边距后的区域）
@@ -307,18 +331,20 @@ function pickWeChatMainWindow(app, candidateWin)
     }
 
     -- 判断窗口是否已经在 Edge Dock 槽位里（避免重复钉同一个已隐藏的窗口）
-    local function isDockedWindow(win)
-        if not win or not win.id then return false end
-        local wid = win:id()
-        if not wid then return false end
-        if EdgeDock and EdgeDock.slots then
-            for _, slot in pairs(EdgeDock.slots) do
-                if slot and slot.winId and slot.winId == wid then
-                    return true
-                end
+    -- 预先构建槽位窗口 ID 集合，避免每个候选窗口都线性扫描槽位
+    local dockedWinIds = {}
+    if EdgeDock and EdgeDock.slots then
+        for _, slot in pairs(EdgeDock.slots) do
+            if slot and slot.winId then
+                dockedWinIds[slot.winId] = true
             end
         end
-        return false
+    end
+
+    local function isDockedWindow(win)
+        if not win then return false end
+        local wid = win:id()
+        return wid ~= nil and dockedWinIds[wid] == true or false
     end
 
     -- 判断窗口是否可用：标准窗口、非搜索窗口、且未被 EdgeDock 占用
@@ -344,7 +370,8 @@ function pickWeChatMainWindow(app, candidateWin)
     for _, win in ipairs(allWindows) do
         if win:isStandard() then
             local title = win:title() or ""
-            local area = win:frame().w * win:frame().h
+            local frame = win:frame()
+            local area = frame and (frame.w * frame.h) or 0
 
             if not searchTitles[title] and not isDockedWindow(win) then
                 if mainTitles[title] then
@@ -382,61 +409,80 @@ if not _G._hsWindowFocusedWindowOriginal then
 end
 local originalFocusedWindow = _G._hsWindowFocusedWindowOriginal
 
--- 短 TTL 缓存：高频调用路径上避免重复 frontmost AX 查询
-_G._hsFocusedWindowCache = _G._hsFocusedWindowCache or { time = 0, result = nil }
+-- 焦点缓存：事件驱动失效（见 rectangle.lua 的窗口过滤器）+ 0.2s 兜底 TTL
+-- 相比固定短 TTL，绝大多数调用直接命中缓存，只在焦点真正变化时才做 AX 查询
+_G._hsFocusedWindowCache = _G._hsFocusedWindowCache or { time = 0, result = nil, invalidated = false }
+
+-- 供其他模块在检测到焦点变化时调用，立即让缓存失效
+function invalidateFocusedWindowCache()
+    _G._hsFocusedWindowCache.invalidated = true
+end
+
+-- 判断应用是否为微信（先按名称快速判断，再确认 bundleID，避免对每个应用做 bundleID 查询）
+local function isWeChatApp(app)
+    if not app then return false end
+    local ok, name = pcall(function() return app:name() end)
+    if not ok or not name then return false end
+    local lower = string.lower(name)
+    if lower ~= "wechat" and lower ~= "weixin" and lower ~= "微信" then
+        return false
+    end
+    local okb, bundleID = pcall(function() return app:bundleID() end)
+    return okb and bundleID == "com.tencent.xinWeChat"
+end
 
 function hs.window.focusedWindow()
+    local cache = _G._hsFocusedWindowCache
     local now = hs.timer.secondsSinceEpoch()
-    if now - _G._hsFocusedWindowCache.time < 0.05 then
-        return _G._hsFocusedWindowCache.result
+
+    if not cache.invalidated and now - cache.time < 0.2 then
+        return cache.result
     end
+    cache.invalidated = false
 
     local win = originalFocusedWindow()
     local frontApp = hs.application.frontmostApplication()
 
     if not frontApp then
-        _G._hsFocusedWindowCache.time = now
-        _G._hsFocusedWindowCache.result = win
+        cache.time = now
+        cache.result = win
         return win
     end
 
-    local okFront, frontBundleID = pcall(function() return frontApp:bundleID() end)
-    local isWeChat = okFront and frontBundleID == "com.tencent.xinWeChat"
-
-    -- 如果原函数返回的窗口已经属于最前台应用，直接返回
+    -- 快捷路径：原函数返回的窗口已经属于最前台应用（最常见情况），
+    -- 通过应用对象比较跳过 bundleID 的重复 AX 查询
     if win then
         local app = win:application()
-        if app then
-            local ok, bundleID = pcall(function() return app:bundleID() end)
-            if ok and bundleID and frontBundleID and bundleID == frontBundleID then
-                if isWeChat then
-                    local fixed = pickWeChatMainWindow(frontApp, win)
-                    if fixed then
-                        _G._hsFocusedWindowCache.time = now
-                        _G._hsFocusedWindowCache.result = fixed
-                        return fixed
-                    end
+        if app and app == frontApp then
+            if isWeChatApp(frontApp) then
+                local fixed = pickWeChatMainWindow(frontApp, win)
+                if fixed then
+                    cache.time = now
+                    cache.result = fixed
+                    return fixed
                 end
-                _G._hsFocusedWindowCache.time = now
-                _G._hsFocusedWindowCache.result = win
-                return win
             end
+            cache.time = now
+            cache.result = win
+            return win
         end
     end
 
-    -- 否则直接询问最前台应用的聚焦窗口（对 Chrome App / PWA 更可靠）
+    -- 原函数返回的窗口不属于最前台应用（Chrome App / PWA 等），直接询问前台应用的聚焦窗口
+    local isWeChat = isWeChatApp(frontApp)
+
     local ok, appWin = pcall(function() return frontApp:focusedWindow() end)
     if ok and appWin then
         if isWeChat then
             local fixed = pickWeChatMainWindow(frontApp, appWin)
             if fixed then
-                _G._hsFocusedWindowCache.time = now
-                _G._hsFocusedWindowCache.result = fixed
+                cache.time = now
+                cache.result = fixed
                 return fixed
             end
         end
-        _G._hsFocusedWindowCache.time = now
-        _G._hsFocusedWindowCache.result = appWin
+        cache.time = now
+        cache.result = appWin
         return appWin
     end
 
@@ -446,41 +492,114 @@ function hs.window.focusedWindow()
         if isWeChat then
             local fixed = pickWeChatMainWindow(frontApp, mainWin)
             if fixed then
-                _G._hsFocusedWindowCache.time = now
-                _G._hsFocusedWindowCache.result = fixed
+                cache.time = now
+                cache.result = fixed
                 return fixed
             end
         end
-        _G._hsFocusedWindowCache.time = now
-        _G._hsFocusedWindowCache.result = mainWin
+        cache.time = now
+        cache.result = mainWin
         return mainWin
     end
 
-    _G._hsFocusedWindowCache.time = now
-    _G._hsFocusedWindowCache.result = win
+    cache.time = now
+    cache.result = win
     return win
 end
 
 print("[Config] hs.window.focusedWindow 已补丁：优先使用前台应用的 focusedWindow，并修复微信搜索窗口误识别")
 
 -- 快速设置窗口 frame（无动画，解决 AXEnhancedUserInterface 问题）
+-- 按应用缓存 AX 状态：多数应用没有启用 AXEnhancedUserInterface，
+-- 缓存后可跳过 applicationElement 创建及属性读写的额外 AX 调用
+local axUiStateCache = {}   -- key: "pid|appName" -> { enhanced = bool, axApp = ax or nil }
+
+-- 窗口 isStandard 短 TTL 缓存：批量移动（平铺/布局恢复）时避免对同一窗口重复 AX 查询
+local standardCache = {}    -- key: winId -> { time = number, standard = bool }
+
+local function windowIsStandard(win)
+    local wid = win:id()
+    if not wid then
+        local ok, std = pcall(function() return win:isStandard() end)
+        return ok and std or false
+    end
+    local cached = standardCache[wid]
+    local now = hs.timer.secondsSinceEpoch()
+    if cached and now - cached.time < 2.0 then
+        return cached.standard
+    end
+    local ok, std = pcall(function() return win:isStandard() end)
+    std = ok and std or false
+    standardCache[wid] = { time = now, standard = std }
+    return std
+end
+
 function setWinFrame(win, rect)
-    if not win or not win.isStandard or not win:isStandard() then return end
+    if not win or not win.isStandard or not windowIsStandard(win) then return end
 
-    local axApp = hs.axuielement.applicationElement(win:application())
-    local wasEnhanced = axApp.AXEnhancedUserInterface
-    if wasEnhanced then
-        axApp.AXEnhancedUserInterface = false
+    local app = win:application()
+    local appKey = nil
+    local cachedAx = nil
+    if app then
+        local okPid, pid = pcall(function() return app:pid() end)
+        local okName, appName = pcall(function() return app:name() end)
+        if okPid and okName then
+            appKey = pid .. "|" .. appName
+            cachedAx = axUiStateCache[appKey]
+        end
     end
 
-    -- 用 pcall 包裹 setFrame，出错时仍然恢复 AXEnhancedUserInterface
-    local ok, err = pcall(function() win:setFrame(rect, 0) end)
-    if not ok then
-        print("[setWinFrame] 设置窗口 frame 失败: " .. tostring(err))
+    if cachedAx then
+        -- 已缓存该应用的 AX 状态
+        if cachedAx.enhanced and cachedAx.axApp then
+            local axApp = cachedAx.axApp
+            local ok, err = pcall(function()
+                axApp.AXEnhancedUserInterface = false
+                win:setFrame(rect, 0)
+                axApp.AXEnhancedUserInterface = true
+            end)
+            if not ok then
+                print("[setWinFrame] 设置窗口 frame 失败: " .. tostring(err))
+            end
+        else
+            -- 未启用该选项：直接设置，避免额外 AX 调用
+            local ok, err = pcall(function() win:setFrame(rect, 0) end)
+            if not ok then
+                print("[setWinFrame] 设置窗口 frame 失败: " .. tostring(err))
+            end
+        end
+        return
     end
 
-    if wasEnhanced then
-        axApp.AXEnhancedUserInterface = true
+    -- 首次遇到该应用：读取并缓存 AX 状态
+    local axApp, wasEnhanced = nil, false
+    if app then
+        local okEl, el = pcall(hs.axuielement.applicationElement, app)
+        if okEl and el then
+            axApp = el
+            local okRead, v = pcall(function() return el.AXEnhancedUserInterface end)
+            wasEnhanced = okRead and v == true or false
+        end
+    end
+
+    if appKey then
+        axUiStateCache[appKey] = { enhanced = wasEnhanced, axApp = axApp }
+    end
+
+    if wasEnhanced and axApp then
+        local ok, err = pcall(function()
+            axApp.AXEnhancedUserInterface = false
+            win:setFrame(rect, 0)
+            axApp.AXEnhancedUserInterface = true
+        end)
+        if not ok then
+            print("[setWinFrame] 设置窗口 frame 失败: " .. tostring(err))
+        end
+    else
+        local ok, err = pcall(function() win:setFrame(rect, 0) end)
+        if not ok then
+            print("[setWinFrame] 设置窗口 frame 失败: " .. tostring(err))
+        end
     end
 end
 
@@ -555,6 +674,10 @@ function cleanupWindowState()
     prune(windowHistory, "windowHistory")
     prune(cycleState, "cycleState")
     prune(thirdCycleState, "thirdCycleState")
+
+    -- 清理短期缓存（边距 / isStandard），避免窗口大量开闭后无限增长
+    marginCache = {}
+    standardCache = {}
 end
 
 -- 每 60 秒清理一次历史状态
