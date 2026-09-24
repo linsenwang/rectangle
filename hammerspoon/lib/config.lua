@@ -25,54 +25,51 @@ mashShift = {"ctrl", "alt", "shift"}  -- Ctrl + Option + Shift
 
 -- 默认边距（所有应用和显示器的默认值）
 margin = {
-    left = 120,      -- 左侧边距（距离屏幕左边缘）
-    right = 11,      -- 右侧边距（距离屏幕右边缘）
+    left = 10,      -- 左侧边距（距离屏幕左边缘）
+    right = 10,      -- 右侧边距（距离屏幕右边缘）
     top = 0,         -- 顶部边距（距离屏幕上边缘）
     bottom = 0,      -- 底部边距（距离屏幕下边缘）
     inner = 40,      -- 中间边距（窗口之间的空隙）
 }
 
 -- 应用特定边距配置（可选）
--- 应用名（不区分大小写） -> 边距配置
+-- 应用名（不区分大小写） -> 边距增量（相对默认边距的增减量，不是绝对边距）
+-- 只写需要调整的字段，未写的字段视为 0（即沿用默认边距）
 appMargins = {
-    -- 示例：Chrome 有侧栏，左边距更大
-    ["Google Chrome"] = { left = 11, right = 11, inner = 40 },
-    ["NetNewsWire"] = { left = 0, right = 60, inner = 40 },
-    -- ["Chrome"] = { left = 80, right = 11, inner = 40 },
-    -- ["Safari"] = { left = 20, right = 11, inner = 40 },
-    ["Code"] = { left = 11, right = 11, inner = 40 },
+    -- Chrome 右侧留得更宽
+    ["Google Chrome"] = { right = 100 },
+    -- NetNewsWire 左侧贴边、右侧留宽：左边距 11 - 11 = 0，右边距 11 + 49 = 60
+    ["NetNewsWire"] = { left = -10, right = 50 },
+    -- 与默认边距一致的可以留空（Code 当前无需调整）
+    ["Code"] = {},
 }
 
 -- 显示器特定边距配置（可选）
--- 支持通过屏幕名称或屏幕ID匹配
--- 优先级低于应用特定配置（appMargins），但两者是叠加而非二选一：
--- 应用配置覆盖它写明的字段，未写的字段（如这里的 top/bottom）仍沿用本表的值
+-- 支持通过屏幕名称或屏幕ID匹配，值与 appMargins 一样是相对默认边距的增量
+-- 与 appMargins 的增量叠加（不是二选一）：应用配置在显示器配置的基础上继续增减
 displayMargins = {
-    -- 示例：内置显示器（Retina 屏幕）
-    -- ["Built-in Retina Display"] = { left = 11, right = 11, inner = 40 },
+    -- 示例：内置显示器（与默认边距一致时留空即可）
+    -- ["Built-in Retina Display"] = {},
 
     -- 示例：特定外接显示器（通过名称匹配）
-    -- ["DELL U2723QE"] = { left = 20, right = 20, inner = 50 },
-    -- ["LG ULTRAWIDE"] = { left = 30, right = 30, inner = 60 },
+    -- ["LG ULTRAWIDE"] = { left = 19, right = 19, inner = 20 },  -- 即 30 / 30 / 60
 
     -- 示例：通过屏幕ID匹配（使用 screen_ID 格式）
-    -- ["screen_69731840"] = { left = 15, right = 15, inner = 45 },
+    -- ["screen_69731840"] = { left = 4, right = 4, inner = 5 },  -- 即 15 / 15 / 45
+
+    -- Mi Monitor：底部留出 160（默认 0 + 160），给底部区域让位
     ["Mi Monitor"] = {
-        left = 120,      -- 左侧边距（距离屏幕左边缘）
-        right = 11,      -- 右侧边距（距离屏幕右边缘）
-        top = 0,         -- 顶部边距（距离屏幕上边缘）
-        bottom = 160,      -- 底部边距（距离屏幕下边缘）
-        inner = 40,      -- 中间边距（窗口之间的空隙）
+        bottom = 160,   -- 底部边距（距离屏幕下边缘）
     }
 }
 
--- 应用+显示器组合配置（优先级最高）
--- 格式：["应用名"] = { ["显示器名"] = {边距配置} }
+-- 应用+显示器组合配置（在显示器/应用增量之上再叠加）
+-- 格式：["应用名"] = { ["显示器名"] = {边距增量} }
 appDisplayMargins = {
-    -- 示例：Chrome 在外接显示器上使用更大的边距
+    -- 示例：Chrome 在外接显示器上再收一点边距
     -- ["Google Chrome"] = {
-    --     ["DELL U2723QE"] = { left = 100, right = 20, inner = 50 },
-    --     ["screen_69731840"] = { left = 80, right = 11, inner = 40 },
+    --     ["DELL U2723QE"] = { left = 89, right = 9, inner = 10 },   -- 即 100 / 20 / 50
+    --     ["screen_69731840"] = { left = 69 },                       -- 即 80 / 11 / 40
     -- },
 }
 
@@ -239,28 +236,32 @@ local function lookupMarginConfig(configs, key, screen)
     return nil
 end
 
--- 分层合并边距：默认 → 显示器 → 应用 → 应用+显示器（越靠后优先级越高）
--- 每层只写要覆盖的字段，未写的沿用上一层，因此显示器配置里的 top/bottom
+-- 分层叠加边距：默认边距 + 各层增量（显示器 → 应用 → 应用+显示器）
+-- appMargins / displayMargins / appDisplayMargins 里写的都是相对默认边距的增量，
+-- 未写的字段视为 0（沿用默认边距）；各层增量相加（不是覆盖），因此显示器配置的 bottom
 -- 对写了自身左右边距的应用（如 Chrome）同样生效
+local MARGIN_FIELDS = {"left", "right", "top", "bottom", "inner"}
+
 local function mergeMargin(layers)
-    local result = {
-        left = margin.left,
-        right = margin.right,
-        top = margin.top,
-        bottom = margin.bottom,
-        inner = margin.inner,
-    }
-    for _, cfg in ipairs(layers) do
+    local result = {}
+    for _, field in ipairs(MARGIN_FIELDS) do
+        result[field] = margin[field] or 0
+    end
+    -- layers 里可能夹着 nil（该层没有配置）；ipairs 会在第一个 nil 处停止，
+    -- 从而漏掉后面的层（例如显示器无配置时应用增量被整段跳过），所以这里用 pairs 遍历，
+    -- 它只访问实际存在的键。累加的是整数，遍历顺序不影响结果
+    for _, cfg in pairs(layers) do
         if cfg then
-            for k, v in pairs(cfg) do
-                if v ~= nil then result[k] = v end
+            for _, field in ipairs(MARGIN_FIELDS) do
+                local v = cfg[field]
+                if v then result[field] = result[field] + v end
             end
         end
     end
     return result
 end
 
--- 获取边距配置（分层叠加：显示器配置作为基线，应用配置覆盖它写明的字段）
+-- 获取边距配置（分层叠加：默认边距 + 显示器/应用/应用+显示器增量）
 -- 内部实现：实际查询逻辑
 local function computeAppMargin(win)
     local app = win:application()
@@ -275,7 +276,7 @@ local function computeAppMargin(win)
     -- 3. 显示器特定配置
     local displayCfg = lookupMarginConfig(displayMargins, screenId, screen)
 
-    -- 4. 叠加到默认配置上
+    -- 4. 把各层增量叠加到默认边距上
     return mergeMargin({displayCfg, appCfg, appDisplayCfg})
 end
 
