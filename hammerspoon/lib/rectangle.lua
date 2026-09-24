@@ -120,7 +120,7 @@ hs.hotkey.bind(mash, "up", function()
     saveWindowState(win)
     local max = getWinScreen(win)
     local area = getUsableArea(max, win)
-    setWinFrame(win, hs.geometry.rect(area.x, area.y, area.w, max.h * 0.5))
+    setWinFrame(win, hs.geometry.rect(area.x, area.y, area.w, area.h * 0.5))
 end)
 
 -- 下半屏（已禁用）
@@ -130,7 +130,7 @@ end)
 --     saveWindowState(win)
 --     local max = getWinScreen(win)
 --     local area = getUsableArea(max)
---     setWinFrame(win, hs.geometry.rect(area.x, area.y + max.h * 0.5, area.w, max.h * 0.5))
+--     setWinFrame(win, hs.geometry.rect(area.x, area.y + area.h * 0.5, area.w, area.h * 0.5))
 -- end)
 
 -- 最大化（应用边距）
@@ -173,9 +173,10 @@ hs.hotkey.bind(mash, "l", function()
     local max = getWinScreen(win)
     local gap = 10  -- 几乎最大化的额外边距
     local m = getAppMargin(win)
+    local area = getUsableArea(max, win)
     setWinFrame(win, hs.geometry.rect(
-        max.x + m.left + gap, max.y + gap,
-        max.w - m.left - m.right - gap * 2, max.h - gap * 2
+        max.x + m.left + gap, area.y + gap,
+        max.w - m.left - m.right - gap * 2, area.h - gap * 2
     ))
 end)
 
@@ -186,7 +187,8 @@ hs.hotkey.bind(mashShift, "up", function()
     saveWindowState(win)
     local max = getWinScreen(win)
     local frame = win:frame()
-    setWinFrame(win, hs.geometry.rect(frame.x, max.y, frame.w, max.h))
+    local area = getUsableArea(max, win)
+    setWinFrame(win, hs.geometry.rect(frame.x, area.y, frame.w, area.h))
 end)
 
 -- ============================================
@@ -202,7 +204,7 @@ hs.hotkey.bind(mash, "u", function()
     local area = getUsableArea(max, win)
     local m = getAppMargin(win)
     local w = (area.w - m.inner) / 2
-    local h = max.h / 2
+    local h = area.h / 2
     setWinFrame(win, hs.geometry.rect(area.x, area.y, w, h))
 end)
 
@@ -215,7 +217,7 @@ hs.hotkey.bind(mash, "i", function()
     local area = getUsableArea(max, win)
     local m = getAppMargin(win)
     local w = (area.w - m.inner) / 2
-    local h = max.h / 2
+    local h = area.h / 2
     local x = area.x + (area.w + m.inner) / 2
     setWinFrame(win, hs.geometry.rect(x, area.y, w, h))
 end)
@@ -229,8 +231,8 @@ hs.hotkey.bind(mash, "0", function()
     local area = getUsableArea(max, win)
     local m = getAppMargin(win)
     local w = (area.w - m.inner) / 2
-    local h = max.h / 2
-    local y = area.y + max.h / 2
+    local h = area.h / 2
+    local y = area.y + area.h / 2
     setWinFrame(win, hs.geometry.rect(area.x, y, w, h))
 end)
 
@@ -243,9 +245,9 @@ hs.hotkey.bind(mash, "2", function()
     local area = getUsableArea(max, win)
     local m = getAppMargin(win)
     local w = (area.w - m.inner) / 2
-    local h = max.h / 2
+    local h = area.h / 2
     local x = area.x + (area.w + m.inner) / 2
-    local y = area.y + max.h / 2
+    local y = area.y + area.h / 2
     setWinFrame(win, hs.geometry.rect(x, y, w, h))
 end)
 
@@ -462,7 +464,7 @@ function detectLayoutMode(win)
     end
 
     -- 2. 全高判断
-    local isFullHeight = approx(frame.h, max.h, 10) and approx(frame.y, max.y, 10)
+    local isFullHeight = approx(frame.h, area.h, 10) and approx(frame.y, area.y, 10)
 
     -- 3. 半屏系列（左/右）
     local usableW = max.w - m.left - m.right - m.inner
@@ -496,7 +498,7 @@ function detectLayoutMode(win)
 
     -- 4. 四角（1/4）
     local halfW = (area.w - m.inner) / 2
-    local halfH = max.h / 2
+    local halfH = area.h / 2
     if approx(frame.w, halfW, 30) and approx(frame.h, halfH, 30) then
         if approx(frame.x, area.x, 10) and approx(frame.y, area.y, 10) then return { type = "corner", pos = "tl" } end
         local rightX = area.x + (area.w + m.inner) / 2
@@ -507,13 +509,13 @@ function detectLayoutMode(win)
 
     -- 5. 上半屏
     if approx(frame.x, area.x, 10) and approx(frame.w, area.w, 10) and
-       approx(frame.y, area.y, 10) and approx(frame.h, max.h * 0.5, 10) then
+       approx(frame.y, area.y, 10) and approx(frame.h, area.h * 0.5, 10) then
         return { type = "top-half" }
     end
 
     -- 6. 下半屏
     if approx(frame.x, area.x, 10) and approx(frame.w, area.w, 10) and
-       approx(frame.y, area.y + max.h * 0.5, 10) and approx(frame.h, max.h * 0.5, 10) then
+       approx(frame.y, area.y + area.h * 0.5, 10) and approx(frame.h, area.h * 0.5, 10) then
         return { type = "bottom-half" }
     end
 
@@ -554,7 +556,7 @@ local function applyLayoutMode(win, mode, screen)
         setWinFrame(win, hs.geometry.rect(xPositions[mode.pos], area.y, thirdW, area.h))
     elseif mode.type == "corner" then
         local halfW = (area.w - m.inner) / 2
-        local halfH = max.h / 2
+        local halfH = area.h / 2
         local x, y
         if mode.pos == "tl" then x, y = area.x, area.y
         elseif mode.pos == "tr" then x, y = area.x + (area.w + m.inner) / 2, area.y
@@ -563,15 +565,15 @@ local function applyLayoutMode(win, mode, screen)
         end
         setWinFrame(win, hs.geometry.rect(x, y, halfW, halfH))
     elseif mode.type == "top-half" then
-        setWinFrame(win, hs.geometry.rect(area.x, area.y, area.w, max.h * 0.5))
+        setWinFrame(win, hs.geometry.rect(area.x, area.y, area.w, area.h * 0.5))
     elseif mode.type == "bottom-half" then
-        setWinFrame(win, hs.geometry.rect(area.x, area.y + max.h * 0.5, area.w, max.h * 0.5))
+        setWinFrame(win, hs.geometry.rect(area.x, area.y + area.h * 0.5, area.w, area.h * 0.5))
     elseif mode.type == "full-height" then
         local newX = max.x + max.w * mode.relX
         local newW = max.w * mode.relW
         newX = math.max(max.x, math.min(newX, max.x + max.w - newW))
         newW = math.min(newW, max.w)
-        setWinFrame(win, hs.geometry.rect(newX, max.y, newW, max.h))
+        setWinFrame(win, hs.geometry.rect(newX, area.y, newW, area.h))
     end
 end
 
@@ -653,6 +655,7 @@ local function isFullHeightWindow(win)
     local frame = win:frame()
     if not frame then return false end
     local m = getAppMargin(win)
+    local area = getUsableArea(max, win)
 
     -- 检测是否是左/右半屏（宽度约为 0.5、2/3、5/6，位置在左/右边缘）
     local isLeftSide = approx(frame.x, max.x, 10) or approx(frame.x, max.x + m.left, 15)
@@ -672,7 +675,7 @@ local function isFullHeightWindow(win)
     )
 
     -- 如果高度已经约等于屏幕高度，也算（已经是全高了）
-    local isAlreadyFullHeight = approx(frame.h, max.h, 10)
+    local isAlreadyFullHeight = approx(frame.h, area.h, 10)
 
     return (isHalfWidth and (isLeftSide or isRightSide)) or isThirdLayout or isAlreadyFullHeight
 end
@@ -685,12 +688,13 @@ local screenChangeTimer = hs.timer.delayed.new(0.5, function()
             if screen then
                 local max = screen:frame()
                 local frame = win:frame()
+                local area = getUsableArea(max, win)
 
                 -- 只处理那些看起来是"半屏/三分之一屏布局"的窗口
                 if isFullHeightWindow(win) then
                     -- 保持 x、w 不变，调整 y 和 h 使其填满新屏幕
-                    if not approx(frame.h, max.h, 10) or not approx(frame.y, max.y, 10) then
-                        setWinFrame(win, hs.geometry.rect(frame.x, max.y, frame.w, max.h))
+                    if not approx(frame.h, area.h, 10) or not approx(frame.y, area.y, 10) then
+                        setWinFrame(win, hs.geometry.rect(frame.x, area.y, frame.w, area.h))
                     end
                 end
             end

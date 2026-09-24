@@ -76,7 +76,7 @@ hs.hotkey.bind({"ctrl", "alt", "cmd"}, "i", function()
         table.insert(info, "\n--- 当前窗口 ---")
         table.insert(info, string.format("应用: %s", appName))
         table.insert(info, string.format("屏幕: %s (ID: %d)", screen:name() or "Unknown", screen:id()))
-        table.insert(info, string.format("当前边距: left=%d, right=%d, inner=%d", m.left, m.right, m.inner))
+        table.insert(info, string.format("当前边距: left=%d, right=%d, top=%d, bottom=%d, inner=%d", m.left, m.right, m.top or 0, m.bottom or 0, m.inner))
     end
     
     local msg = table.concat(info, "\n\n")

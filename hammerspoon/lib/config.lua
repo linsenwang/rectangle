@@ -27,6 +27,8 @@ mashShift = {"ctrl", "alt", "shift"}  -- Ctrl + Option + Shift
 margin = {
     left = 120,      -- 左侧边距（距离屏幕左边缘）
     right = 11,      -- 右侧边距（距离屏幕右边缘）
+    top = 0,         -- 顶部边距（距离屏幕上边缘）
+    bottom = 0,      -- 底部边距（距离屏幕下边缘）
     inner = 40,      -- 中间边距（窗口之间的空隙）
 }
 
@@ -43,6 +45,8 @@ appMargins = {
 
 -- 显示器特定边距配置（可选）
 -- 支持通过屏幕名称或屏幕ID匹配
+-- 优先级低于应用特定配置（appMargins），但两者是叠加而非二选一：
+-- 应用配置覆盖它写明的字段，未写的字段（如这里的 top/bottom）仍沿用本表的值
 displayMargins = {
     -- 示例：内置显示器（Retina 屏幕）
     -- ["Built-in Retina Display"] = { left = 11, right = 11, inner = 40 },
@@ -53,6 +57,13 @@ displayMargins = {
 
     -- 示例：通过屏幕ID匹配（使用 screen_ID 格式）
     -- ["screen_69731840"] = { left = 15, right = 15, inner = 45 },
+    ["Mi Monitor"] = {
+        left = 120,      -- 左侧边距（距离屏幕左边缘）
+        right = 11,      -- 右侧边距（距离屏幕右边缘）
+        top = 0,         -- 顶部边距（距离屏幕上边缘）
+        bottom = 160,      -- 底部边距（距离屏幕下边缘）
+        inner = 40,      -- 中间边距（窗口之间的空隙）
+    }
 }
 
 -- 应用+显示器组合配置（优先级最高）
@@ -212,7 +223,44 @@ function getScreenIdentifier(screen)
     return screen:name() or ("screen_" .. screen:id())
 end
 
--- 获取边距配置（综合考虑应用和显示器）
+-- 在配置表中查找匹配的边距项：精确名称 → screen_<id> → 大小写不敏感
+local function lookupMarginConfig(configs, key, screen)
+    if not configs or not key then return nil end
+    if configs[key] then return configs[key] end
+    if screen then
+        local idKey = "screen_" .. screen:id()
+        if configs[idKey] then return configs[idKey] end
+    end
+    for name, config in pairs(configs) do
+        if string.lower(name) == string.lower(key) then
+            return config
+        end
+    end
+    return nil
+end
+
+-- 分层合并边距：默认 → 显示器 → 应用 → 应用+显示器（越靠后优先级越高）
+-- 每层只写要覆盖的字段，未写的沿用上一层，因此显示器配置里的 top/bottom
+-- 对写了自身左右边距的应用（如 Chrome）同样生效
+local function mergeMargin(layers)
+    local result = {
+        left = margin.left,
+        right = margin.right,
+        top = margin.top,
+        bottom = margin.bottom,
+        inner = margin.inner,
+    }
+    for _, cfg in ipairs(layers) do
+        if cfg then
+            for k, v in pairs(cfg) do
+                if v ~= nil then result[k] = v end
+            end
+        end
+    end
+    return result
+end
+
+-- 获取边距配置（分层叠加：显示器配置作为基线，应用配置覆盖它写明的字段）
 -- 内部实现：实际查询逻辑
 local function computeAppMargin(win)
     local app = win:application()
@@ -220,63 +268,15 @@ local function computeAppMargin(win)
     local screen = win:screen()
     local screenId = getScreenIdentifier(screen)
 
-    -- 1. 优先检查应用+显示器组合配置
-    if appName and screenId and appDisplayMargins[appName] then
-        local displayConfig = appDisplayMargins[appName]
-        -- 尝试精确匹配屏幕名称
-        if displayConfig[screenId] then
-            return displayConfig[screenId]
-        end
-        -- 尝试通过屏幕ID匹配
-        if screen then
-            local idKey = "screen_" .. screen:id()
-            if displayConfig[idKey] then
-                return displayConfig[idKey]
-            end
-        end
-        -- 尝试大小写不敏感匹配
-        for name, config in pairs(displayConfig) do
-            if string.lower(name) == string.lower(screenId) then
-                return config
-            end
-        end
-    end
+    -- 1. 应用+显示器组合配置（最具体）
+    local appDisplayCfg = lookupMarginConfig(appDisplayMargins[appName], screenId, screen)
+    -- 2. 应用特定配置
+    local appCfg = lookupMarginConfig(appMargins, appName)
+    -- 3. 显示器特定配置
+    local displayCfg = lookupMarginConfig(displayMargins, screenId, screen)
 
-    -- 2. 检查应用特定配置
-    if appName then
-        if appMargins[appName] then
-            return appMargins[appName]
-        end
-        -- 尝试大小写不敏感匹配
-        for name, config in pairs(appMargins) do
-            if string.lower(name) == string.lower(appName) then
-                return config
-            end
-        end
-    end
-
-    -- 3. 检查显示器特定配置
-    if screenId then
-        if displayMargins[screenId] then
-            return displayMargins[screenId]
-        end
-        -- 尝试通过屏幕ID匹配
-        if screen then
-            local idKey = "screen_" .. screen:id()
-            if displayMargins[idKey] then
-                return displayMargins[idKey]
-            end
-        end
-        -- 尝试大小写不敏感匹配
-        for name, config in pairs(displayMargins) do
-            if string.lower(name) == string.lower(screenId) then
-                return config
-            end
-        end
-    end
-
-    -- 4. 返回默认配置
-    return margin
+    -- 4. 叠加到默认配置上
+    return mergeMargin({displayCfg, appCfg, appDisplayCfg})
 end
 
 -- 边距查询缓存：同一窗口在一次快捷键处理中会被多次查询（getUsableArea / detectLayoutMode 等），
@@ -308,11 +308,14 @@ end
 -- @param win 可选，窗口对象，用于获取应用特定边距
 function getUsableArea(max, win)
     local m = win and getAppMargin(win) or margin
+    -- computeAppMargin 已把各层边距合并成完整配置，这里只做兜底
+    local top = m.top or 0
+    local bottom = m.bottom or 0
     return {
         x = max.x + m.left,
-        y = max.y,
+        y = max.y + top,
         w = max.w - m.left - m.right,
-        h = max.h
+        h = max.h - top - bottom
     }
 end
 
