@@ -331,7 +331,12 @@ end
 
 -- ============================================
 -- 微信窗口选择辅助
--- 微信的搜索/隐藏窗口常被误识别为前台窗口，这里提供主窗口选择逻辑
+-- 微信的搜索/隐藏窗口常被误识别为前台窗口，这里提供主窗口选择逻辑。
+-- 语义：
+--   candidateWin 可用（标准、可见、非槽位、非屏幕外）时原样返回 —— 用户聚焦哪个窗口就操作哪个，
+--     这样文章窗口 / 公众号窗口 / 聊天窗口才能各自独立调整位置；
+--   candidateWin 不可用或传 nil 时，才回退去挑「微信主窗口」（标题 WeChat/Weixin/微信）。
+-- 需要主窗口的调用方（自动停靠、Edge Dock 槽位）应显式传 nil。
 -- ============================================
 
 function pickWeChatMainWindow(app, candidateWin)
@@ -344,9 +349,11 @@ function pickWeChatMainWindow(app, candidateWin)
     end
 
     local mainTitles = { ["WeChat"] = true, ["Weixin"] = true, ["微信"] = true }
-    -- 只排除实际观察到的搜索/辅助窗口标题，后续观察到新的再加
+    -- 微信 4.x 的正文/文章窗口和搜索窗口标题都叫「WeChat (Window)」，光看标题分不开。
+    -- 这个列表只在「候选窗口不可用、需要另找主窗口」时用来排除，
+    -- 绝不用来否定用户当前聚焦的窗口（否则文章窗口会被当成搜索窗口换掉）
     local searchTitles = {
-        ["WeChat (Window)"] = true,   -- 当前实际观察到的搜索窗口标题
+        ["WeChat (Window)"] = true,
     }
 
     -- 判断窗口是否已经在 Edge Dock 槽位里（避免重复钉同一个已隐藏的窗口）
@@ -366,16 +373,40 @@ function pickWeChatMainWindow(app, candidateWin)
         return wid ~= nil and dockedWinIds[wid] == true or false
     end
 
-    -- 判断窗口是否可用：标准窗口、非搜索窗口、且未被 EdgeDock 占用
+    -- 判断窗口能不能作为「用户正在操作的窗口」：标准窗口、未最小化、拿得到有效 id、
+    -- 未被 Edge Dock 占用、没被藏到屏幕外、尺寸正常。
+    -- 注意：这里不按标题否定窗口——文章窗口和搜索窗口同名，按标题否定会把用户正在调整的
+    -- 文章窗口换成公众号窗口，导致这两个窗口无法区分
     local function isUsableWindow(win)
-        if not win or not win.isStandard or not win:isStandard() then return false end
-        local title = win:title() or ""
-        if searchTitles[title] then return false end
+        if not win then return false end
+
+        local wid = win:id()
+        if not wid or wid <= 0 then return false end
+
+        if not win.isStandard or not win:isStandard() then return false end
+
+        local okMin, minimized = pcall(function() return win:isMinimized() end)
+        if okMin and minimized then return false end
+
         if isDockedWindow(win) then return false end
+
+        local okFrame, frame = pcall(function() return win:frame() end)
+        if not okFrame or not frame or frame.w < 50 or frame.h < 50 then return false end
+
+        -- 被藏到屏幕外的窗口（例如 Edge Dock 的隐藏位置）不算可用
+        local screen = win:screen()
+        if screen then
+            local sf = screen:frame()
+            if frame.x >= sf.x + sf.w - 10 or frame.y >= sf.y + sf.h - 10 then
+                return false
+            end
+        end
+
         return true
     end
 
-    -- 候选窗口本身可用就直接用（保留用户主动聚焦的聊天窗口/公众号窗口等）
+    -- 候选窗口本身可用就直接用：用户聚焦哪个微信窗口就操作哪个，
+    -- 这样文章窗口、公众号窗口、聊天窗口才能各自独立调整位置
     if isUsableWindow(candidateWin) then
         return candidateWin
     end
@@ -387,12 +418,12 @@ function pickWeChatMainWindow(app, candidateWin)
     local bestOther = nil
 
     for _, win in ipairs(allWindows) do
-        if win:isStandard() then
+        if isUsableWindow(win) then
             local title = win:title() or ""
             local frame = win:frame()
             local area = frame and (frame.w * frame.h) or 0
 
-            if not searchTitles[title] and not isDockedWindow(win) then
+            if not searchTitles[title] then
                 if mainTitles[title] then
                     if not bestMain or area > bestMain.area then
                         bestMain = { win = win, area = area, title = title }
