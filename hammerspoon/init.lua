@@ -15,8 +15,10 @@ require("rectangle")       -- 窗口管理核心（半屏/全屏/居中/四角�
 require("layout")          -- 布局保存/恢复
 require("edge_dock")       -- Edge Dock（必须在 tiling 之前加载）
 require("tiling")          -- 窗口平铺（依赖 EdgeDock）
+require("stitch_fullscreen") -- 拼接全屏：按比例铺满屏幕（依赖 TileManager）
 require("auto_dock")       -- 自动停靠（依赖 EdgeDock）
 require("display_layout")  -- 显示器布局记忆
+require("window_profile")  -- 窗口布局属性：屏幕变化后按属性重排
 require("capswriter")      -- CapsWriter 鼠标侧键触发录音（UDP 控制）
 require("notification_watch")  -- 通知监听：通知含「签到」时自动执行签到脚本
 require("keybindings")     -- 快捷键帮助面板 (Ctrl+Option+/)

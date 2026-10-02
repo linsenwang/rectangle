@@ -8,13 +8,22 @@ TileManager.originalLayouts = {}
 -- 使用 config.lua 中的平铺配置
 TileManager.config = TilingConfig
 
+-- Chrome App / PWA（如 DeepSeek）的窗口标题为空，但它们是正常的标准窗口，不能被当成辅助窗口排除
+local function isChromeAppWindow(win)
+    local app = win:application()
+    if not app then return false end
+    local ok, bundleID = pcall(function() return app:bundleID() end)
+    return ok and type(bundleID) == "string"
+        and bundleID:find("com.google.Chrome.app.", 1, true) == 1
+end
+
 -- 严格的窗口过滤：排除辅助窗口、对话框、无标题窗口等
 local function isRealWindow(win)
     if not win or not win:isStandard() then return false end
 
-    -- 排除无标题窗口（很多辅助窗口没有标题）
+    -- 排除无标题窗口（很多辅助窗口没有标题）；Chrome App / PWA 是例外
     local title = win:title()
-    if not title or title == "" then return false end
+    if (not title or title == "") and not isChromeAppWindow(win) then return false end
 
     -- 只保留真正的标准窗口，排除对话框等
     local subrole = win:subrole()

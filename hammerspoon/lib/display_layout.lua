@@ -234,33 +234,9 @@ function DisplayLayoutManager.onScreenChange()
     --     DisplayLayoutManager.saveLayout()
     -- end
     
-    -- 如果是从单屏变成多屏，尝试恢复布局
-    if lastCount == 1 and currentCount > 1 then
-        print("[DisplayLayout] 外接显示器连接，尝试恢复布局...")
-        -- 延迟一点等待显示器完全识别
-        hs.timer.doAfter(1.5, function()
-            -- 尝试找到之前多屏配置的布局
-            -- 遍历所有保存的布局，找到屏幕数量匹配的
-            local targetConfig = nil
-            for config, _ in pairs(DisplayLayoutManager.savedLayouts) do
-                -- 配置格式是 "id1_id2_id3"，通过下划线数量判断屏幕数
-                local _, count = string.gsub(config, "_", "")
-                local screenCount = count + 1
-                if screenCount == currentCount then
-                    targetConfig = config
-                    break
-                end
-            end
-            
-            if targetConfig then
-                DisplayLayoutManager.restoreLayout(targetConfig)
-            else
-                -- 如果没有找到匹配的，尝试保存当前单屏布局后恢复
-                -- 或者使用最近的保存的布局
-                print("[DisplayLayout] 没有找到匹配的 " .. currentCount .. " 屏配置")
-            end
-        end)
-    end
+    -- 从单屏变成多屏时，原来会在这里按保存的绝对坐标恢复布局（已禁用自动恢复）。
+    -- 现在窗口改由 window_profile 按「布局属性」自动重排，比绝对坐标更能适应不同分辨率的屏幕；
+    -- 已保存的多屏配置仍然保留，需要时用 ⌃⌥ D 手动恢复。
     
     -- 如果是多屏之间的变化（比如换了不同的外接显示器），也保存一下（已禁用自动保存）
     -- if lastCount > 1 and currentCount > 1 and lastCount == currentCount then

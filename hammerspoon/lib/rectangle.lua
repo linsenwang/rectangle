@@ -401,16 +401,29 @@ end)
 -- 显示器切换
 -- ============================================
 
+-- 跨屏移动后，按布局属性在新屏幕上重排（避免沿用上一个屏幕的比例）
+local function moveToAdjacentScreen(win, east)
+    local mode = WindowProfile.getMode(win)
+    if east then
+        win:moveOneScreenEast()
+    else
+        win:moveOneScreenWest()
+    end
+    hs.timer.doAfter(0.15, function()
+        pcall(function() WindowProfile.apply(win, mode) end)
+    end)
+end
+
 hs.hotkey.bind(mashShift, "right", function()
     local win = hs.window.focusedWindow()
     if not win then return end
-    win:moveOneScreenEast()
+    moveToAdjacentScreen(win, true)
 end)
 
 hs.hotkey.bind(mashShift, "left", function()
     local win = hs.window.focusedWindow()
     if not win then return end
-    win:moveOneScreenWest()
+    moveToAdjacentScreen(win, false)
 end)
 
 -- ============================================
@@ -447,13 +460,12 @@ end)
 -- 窗口布局模式检测与应用（跨显示器移动时保持比例）
 -- ============================================
 
--- 检测窗口当前的布局模式
-function detectLayoutMode(win)
-    local screen = win:screen()
-    if not screen then return nil end
-    local max = screen:frame()
-    local frame = win:frame()
-    if not frame then return nil end
+-- 判断一组几何形状属于哪种布局模式（窗口可能不在屏幕上，比如 Edge Dock 槽位窗口）
+-- @param frame 窗口 frame
+-- @param max 屏幕 frame
+-- @param win 窗口（用于取应用 / 显示器边距）
+function detectLayoutModeForFrame(frame, max, win)
+    if not frame or not max then return nil end
     local m = getAppMargin(win)
     local area = getUsableArea(max, win)
 
@@ -519,7 +531,13 @@ function detectLayoutMode(win)
         return { type = "bottom-half" }
     end
 
-    -- 7. 仅全高（贴边等），记录相对位置
+    -- 7. 居中：水平、垂直都居中，记录相对尺寸
+    if approx(frame.x + frame.w / 2, area.x + area.w / 2, 20) and
+       approx(frame.y + frame.h / 2, area.y + area.h / 2, 20) then
+        return { type = "center", relW = frame.w / area.w, relH = frame.h / area.h }
+    end
+
+    -- 8. 仅全高（贴边等），记录相对位置
     if isFullHeight then
         local relX = (frame.x - max.x) / max.w
         local relW = frame.w / max.w
@@ -529,23 +547,32 @@ function detectLayoutMode(win)
     return nil
 end
 
--- 在新屏幕上应用布局模式
-local function applyLayoutMode(win, mode, screen)
-    local max = screen:frame()
+-- 检测窗口当前的布局模式
+function detectLayoutMode(win)
+    local screen = win:screen()
+    if not screen then return nil end
+    return detectLayoutModeForFrame(win:frame(), screen:frame(), win)
+end
+
+-- 计算某种布局模式在指定屏幕上的 frame（只计算不移动窗口，Edge Dock 槽位窗口也用它）
+-- @param max 屏幕 frame
+-- @param win 窗口（用于取应用 / 显示器边距）
+function layoutFrameFor(mode, max, win)
+    if not mode or not max then return nil end
     local area = getUsableArea(max, win)
     local m = getAppMargin(win)
 
     if mode.type == "maximized" then
-        setWinFrame(win, hs.geometry.rect(area.x, area.y, area.w, area.h))
+        return hs.geometry.rect(area.x, area.y, area.w, area.h)
     elseif mode.type == "left-half" then
         local usableW = max.w - m.left - m.right - m.inner
         local w = usableW * mode.ratio
-        setWinFrame(win, hs.geometry.rect(max.x + m.left, area.y, w, area.h))
+        return hs.geometry.rect(max.x + m.left, area.y, w, area.h)
     elseif mode.type == "right-half" then
         local usableW = max.w - m.left - m.right - m.inner
         local w = usableW * mode.ratio
         local x = max.x + max.w - m.right - w
-        setWinFrame(win, hs.geometry.rect(x, area.y, w, area.h))
+        return hs.geometry.rect(x, area.y, w, area.h)
     elseif mode.type == "third" then
         local thirdW = (area.w - m.inner * 2) / 3
         local xPositions = {
@@ -553,7 +580,7 @@ local function applyLayoutMode(win, mode, screen)
             area.x + thirdW + m.inner,
             area.x + (thirdW + m.inner) * 2
         }
-        setWinFrame(win, hs.geometry.rect(xPositions[mode.pos], area.y, thirdW, area.h))
+        return hs.geometry.rect(xPositions[mode.pos], area.y, thirdW, area.h)
     elseif mode.type == "corner" then
         local halfW = (area.w - m.inner) / 2
         local halfH = area.h / 2
@@ -563,18 +590,38 @@ local function applyLayoutMode(win, mode, screen)
         elseif mode.pos == "bl" then x, y = area.x, area.y + halfH
         elseif mode.pos == "br" then x, y = area.x + (area.w + m.inner) / 2, area.y + halfH
         end
-        setWinFrame(win, hs.geometry.rect(x, y, halfW, halfH))
+        return hs.geometry.rect(x, y, halfW, halfH)
     elseif mode.type == "top-half" then
-        setWinFrame(win, hs.geometry.rect(area.x, area.y, area.w, area.h * 0.5))
+        return hs.geometry.rect(area.x, area.y, area.w, area.h * 0.5)
     elseif mode.type == "bottom-half" then
-        setWinFrame(win, hs.geometry.rect(area.x, area.y + area.h * 0.5, area.w, area.h * 0.5))
+        return hs.geometry.rect(area.x, area.y + area.h * 0.5, area.w, area.h * 0.5)
     elseif mode.type == "full-height" then
         local newX = max.x + max.w * mode.relX
         local newW = max.w * mode.relW
         newX = math.max(max.x, math.min(newX, max.x + max.w - newW))
         newW = math.min(newW, max.w)
-        setWinFrame(win, hs.geometry.rect(newX, area.y, newW, area.h))
+        return hs.geometry.rect(newX, area.y, newW, area.h)
+    elseif mode.type == "center" then
+        -- 在可用区域内居中，尺寸按记录的比例缩放
+        local w = math.min(mode.relW * area.w, area.w)
+        local h = math.min(mode.relH * area.h, area.h)
+        return hs.geometry.rect(area.x + (area.w - w) / 2, area.y + (area.h - h) / 2, w, h)
+    elseif mode.type == "free" then
+        -- 自由：按相对整块屏幕的比例平移缩放
+        local w = math.min(mode.relW * max.w, max.w)
+        local h = math.min(mode.relH * max.h, max.h)
+        local x = math.max(max.x, math.min(max.x + mode.relX * max.w, max.x + max.w - w))
+        local y = math.max(max.y, math.min(max.y + mode.relY * max.h, max.y + max.h - h))
+        return hs.geometry.rect(x, y, w, h)
     end
+
+    return nil
+end
+
+-- 在新屏幕上应用布局模式（window_profile 按窗口属性重排时也会调用）
+function applyLayoutMode(win, mode, screen)
+    local frame = layoutFrameFor(mode, screen:frame(), win)
+    if frame then setWinFrame(win, frame) end
 end
 
 -- ============================================
@@ -644,68 +691,11 @@ end
 hs.hotkey.bind({"ctrl", "alt", "cmd"}, "down", moveToOtherScreen)
 
 -- ============================================
--- 屏幕切换后自动调整半屏窗口高度
+-- 屏幕变化后的窗口重排
 -- ============================================
-
--- 检测窗口是否是"全高"类型（需要在新屏幕上保持全高）
-local function isFullHeightWindow(win)
-    local screen = win:screen()
-    if not screen then return false end
-    local max = screen:frame()
-    local frame = win:frame()
-    if not frame then return false end
-    local m = getAppMargin(win)
-    local area = getUsableArea(max, win)
-
-    -- 检测是否是左/右半屏（宽度约为 0.5、2/3、5/6，位置在左/右边缘）
-    local isLeftSide = approx(frame.x, max.x, 10) or approx(frame.x, max.x + m.left, 15)
-    local isRightSide = approx(frame.x + frame.w, max.x + max.w, 10) or
-                        approx(frame.x + frame.w, max.x + max.w - m.right, 15)
-    local isHalfWidth = approx(frame.w, max.w * 0.5, 40) or
-                        approx(frame.w, max.w * 2/3, 40) or
-                        approx(frame.w, max.w * 5/6, 40)
-
-    -- 检测是否是 1/3 分屏
-    local thirdW = (max.w - m.left - m.right - m.inner * 2) / 3
-    local isThirdWidth = approx(frame.w, thirdW, 30)
-    local isThirdLayout = isThirdWidth and (
-        approx(frame.x, max.x + m.left, 15) or
-        approx(frame.x, max.x + m.left + thirdW + m.inner, 15) or
-        approx(frame.x, max.x + m.left + (thirdW + m.inner) * 2, 15)
-    )
-
-    -- 如果高度已经约等于屏幕高度，也算（已经是全高了）
-    local isAlreadyFullHeight = approx(frame.h, area.h, 10)
-
-    return (isHalfWidth and (isLeftSide or isRightSide)) or isThirdLayout or isAlreadyFullHeight
-end
-
--- 屏幕变化监听器：自动调整窗口高度（delayed 去抖，避免扩展坞插拔时任务叠加）
-local screenChangeTimer = hs.timer.delayed.new(0.5, function()
-    for _, win in ipairs(hs.window.allWindows()) do
-        if win:isStandard() then
-            local screen = win:screen()
-            if screen then
-                local max = screen:frame()
-                local frame = win:frame()
-                local area = getUsableArea(max, win)
-
-                -- 只处理那些看起来是"半屏/三分之一屏布局"的窗口
-                if isFullHeightWindow(win) then
-                    -- 保持 x、w 不变，调整 y 和 h 使其填满新屏幕
-                    if not approx(frame.h, area.h, 10) or not approx(frame.y, area.y, 10) then
-                        setWinFrame(win, hs.geometry.rect(frame.x, area.y, frame.w, area.h))
-                    end
-                end
-            end
-        end
-    end
-end)
-
-local screenChangeWatcher = hs.screen.watcher.new(function()
-    screenChangeTimer:start()
-end)
-screenChangeWatcher:start()
+-- 以前这里只把「看起来是全高」的窗口高度补满新屏幕，宽度仍沿用旧屏幕的像素值。
+-- 现在统一交给 lib/window_profile.lua：每个窗口记录布局属性（半屏 / 居中 / 1/3 ...），
+-- 显示器变化后按属性在新屏幕上重新计算，自由窗口则按屏幕相对比例适配。
 
 -- ============================================
 -- 与上一个焦点窗口交换位置

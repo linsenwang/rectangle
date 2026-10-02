@@ -59,7 +59,8 @@ displayMargins = {
 
     -- Mi Monitor：底部留出 160（默认 0 + 160），给底部区域让位
     ["Mi Monitor"] = {
-        bottom = 160,   -- 底部边距（距离屏幕下边缘）
+        left = 400,
+        -- bottom = 160,   -- 底部边距（距离屏幕下边缘）
     }
 }
 
@@ -618,6 +619,17 @@ function setWinFrame(win, rect)
         if not ok then
             print("[setWinFrame] 设置窗口 frame 失败: " .. tostring(err))
         end
+    end
+end
+
+-- 包装 setWinFrame：写入后通知 WindowProfile 记录该窗口的布局属性，
+-- 这样显示器变化后可以按属性重排（见 lib/window_profile.lua）
+local rawSetWinFrame = setWinFrame
+
+function setWinFrame(win, rect)
+    rawSetWinFrame(win, rect)
+    if WindowProfile and WindowProfile.touch then
+        WindowProfile.touch(win)
     end
 end
 
