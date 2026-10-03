@@ -475,10 +475,18 @@ function detectLayoutModeForFrame(frame, max, win)
         return { type = "maximized" }
     end
 
-    -- 2. 全高判断
+    -- 2. 居中：水平、垂直都居中，记录相对尺寸
+    -- 必须排在半屏/三分之一之前：中间三分之一本身就是居中的，若先判三分之一，
+    -- 居中窗口会被记成「中 1/3」，交换位置时对方就被摆到三分之一槽位上（看起来就「歪」了）
+    if approx(frame.x + frame.w / 2, area.x + area.w / 2, 20) and
+       approx(frame.y + frame.h / 2, area.y + area.h / 2, 20) then
+        return { type = "center", relW = frame.w / area.w, relH = frame.h / area.h }
+    end
+
+    -- 3. 全高判断
     local isFullHeight = approx(frame.h, area.h, 10) and approx(frame.y, area.y, 10)
 
-    -- 3. 半屏系列（左/右）
+    -- 4. 半屏系列（左/右）
     local usableW = max.w - m.left - m.right - m.inner
     local leftEdge = max.x + m.left
     local rightEdge = max.x + max.w - m.right
@@ -508,7 +516,7 @@ function detectLayoutModeForFrame(frame, max, win)
         end
     end
 
-    -- 4. 四角（1/4）
+    -- 5. 四角（1/4）
     local halfW = (area.w - m.inner) / 2
     local halfH = area.h / 2
     if approx(frame.w, halfW, 30) and approx(frame.h, halfH, 30) then
@@ -519,22 +527,16 @@ function detectLayoutModeForFrame(frame, max, win)
         if approx(frame.x, rightX, 10) and approx(frame.y, area.y + halfH, 10) then return { type = "corner", pos = "br" } end
     end
 
-    -- 5. 上半屏
+    -- 6. 上半屏
     if approx(frame.x, area.x, 10) and approx(frame.w, area.w, 10) and
        approx(frame.y, area.y, 10) and approx(frame.h, area.h * 0.5, 10) then
         return { type = "top-half" }
     end
 
-    -- 6. 下半屏
+    -- 7. 下半屏
     if approx(frame.x, area.x, 10) and approx(frame.w, area.w, 10) and
        approx(frame.y, area.y + area.h * 0.5, 10) and approx(frame.h, area.h * 0.5, 10) then
         return { type = "bottom-half" }
-    end
-
-    -- 7. 居中：水平、垂直都居中，记录相对尺寸
-    if approx(frame.x + frame.w / 2, area.x + area.w / 2, 20) and
-       approx(frame.y + frame.h / 2, area.y + area.h / 2, 20) then
-        return { type = "center", relW = frame.w / area.w, relH = frame.h / area.h }
     end
 
     -- 8. 仅全高（贴边等），记录相对位置
@@ -698,7 +700,7 @@ hs.hotkey.bind({"ctrl", "alt", "cmd"}, "down", moveToOtherScreen)
 -- 显示器变化后按属性在新屏幕上重新计算，自由窗口则按屏幕相对比例适配。
 
 -- ============================================
--- 与上一个焦点窗口交换位置
+-- 与上一个焦点窗口交换位置与前后层次（大小不变）
 -- ============================================
 
 local previousFocusedWindow = nil
@@ -716,6 +718,83 @@ swapFilter:subscribe(hs.window.filter.windowFocused, function(win)
         currentFocusedWindow = win
     end
 end)
+
+-- 取窗口的布局属性：优先按当前几何识别（识别不出时才用 lib/window_profile.lua 里
+-- 切换屏幕时保存的属性），仍识别不出就按屏幕相对比例当作「自由」
+-- 注意顺序：WindowProfile 的记录有 0.4s 防抖，刚交换完马上再按一次时记录还是旧的，
+-- 若优先用记录，第二次计算出的位置和第一次一样，看起来就像「第二次没反应」
+local function layoutModeOf(win)
+    local mode = detectLayoutMode(win)
+    if mode then return mode end
+
+    if WindowProfile and WindowProfile.getMode then
+        mode = WindowProfile.getMode(win)
+        if mode then return mode end
+    end
+
+    local screen = win:screen()
+    local frame = win:frame()
+    if not screen or not frame then return nil end
+    local max = screen:frame()
+    return {
+        type = "free",
+        relX = (frame.x - max.x) / max.w,
+        relY = (frame.y - max.y) / max.h,
+        relW = frame.w / max.w,
+        relH = frame.h / max.h,
+    }
+end
+
+-- 按布局属性求该属性对应的「位置」（左上角坐标）
+-- 尺寸由调用方传入窗口自己的 w/h：只取位置，大小不动；
+-- 坐标基于可用区域，并保证窗口不会越出可用区域
+local function positionForMode(mode, max, win, w, h)
+    if not mode or not max then return nil end
+    local area = getUsableArea(max, win)
+    local m = getAppMargin(win)
+    local t = mode.type
+    local x, y = area.x, area.y
+
+    if t == "right-half" then
+        x = area.x + area.w - w
+    elseif t == "third" then
+        local thirdW = (area.w - m.inner * 2) / 3
+        x = area.x + (thirdW + m.inner) * ((mode.pos or 1) - 1)
+    elseif t == "corner" then
+        if mode.pos == "tr" or mode.pos == "br" then
+            x = area.x + (area.w + m.inner) / 2
+        end
+        if mode.pos == "bl" or mode.pos == "br" then
+            y = area.y + area.h - h
+        end
+    elseif t == "full-height" or t == "free" then
+        x = max.x + max.w * (mode.relX or 0)
+        if t == "free" then
+            y = max.y + max.h * (mode.relY or 0)
+        end
+    elseif t == "center" then
+        x = area.x + (area.w - w) / 2
+        y = area.y + (area.h - h) / 2
+    elseif t == "bottom-half" then
+        y = area.y + area.h - h
+    end
+
+    x = math.max(area.x, math.min(x, area.x + area.w - w))
+    y = math.max(area.y, math.min(y, area.y + area.h - h))
+    return x, y
+end
+
+-- 窗口在当前屏幕上的前后顺序（1 = 最前）；不在层叠列表里返回 nil
+local function zOrderIndex(win)
+    local ok, list = pcall(hs.window.orderedWindows)
+    if not ok or not list then return nil end
+    local id = win:id()
+    if not id then return nil end
+    for i, w in ipairs(list) do
+        if w:id() == id then return i end
+    end
+    return nil
+end
 
 local function swapWithPreviousWindow()
     local win = hs.window.focusedWindow()
@@ -738,13 +817,6 @@ local function swapWithPreviousWindow()
         return
     end
 
-    -- 保存状态以便还原
-    saveWindowState(win)
-    saveWindowState(prev)
-
-    local frame1 = win:frame()
-    local frame2 = prev:frame()
-
     -- 只在同一屏幕内交换，避免跨屏幕坐标混乱
     local screen1 = win:screen()
     local screen2 = prev:screen()
@@ -753,63 +825,39 @@ local function swapWithPreviousWindow()
         return
     end
 
-    -- 检测窗口的水平对齐方式（左/右/居中/浮动），交换时保持对齐语义
-    local function getAnchor(win0, frame)
-        local max0 = getWinScreen(win0)
-        local area0 = getUsableArea(max0, win0)
-        local centerLine = area0.x + area0.w / 2
-        if approx(frame.x, area0.x, 20) or approx(frame.x, max0.x, 20) then
-            return { type = "left", ref = frame.x }
-        elseif approx(frame.x + frame.w, area0.x + area0.w, 20) or
-               approx(frame.x + frame.w, max0.x + max0.w, 20) then
-            return { type = "right", ref = frame.x + frame.w }
-        elseif approx(frame.x + frame.w / 2, centerLine, 20) then
-            return { type = "center", ref = centerLine }
-        else
-            return { type = "float", ref = frame.x }
-        end
+    local frame1 = win:frame()
+    local frame2 = prev:frame()
+    local max = screen1:frame()
+
+    -- 前后关系（谁在前面）也要交换：先记下当前层叠顺序，原来看不到的窗口换到前面
+    local z1, z2 = zOrderIndex(win), zOrderIndex(prev)
+    local toFront = nil
+    if z1 and z2 and z1 ~= z2 then
+        toFront = (z1 > z2) and win or prev
     end
 
-    local function applyAnchor(frame, anchor)
-        if anchor.type == "left" then
-            return anchor.ref
-        elseif anchor.type == "right" then
-            return anchor.ref - frame.w
-        elseif anchor.type == "center" then
-            return anchor.ref - frame.w / 2
-        else
-            return anchor.ref
-        end
-    end
+    -- 只交换位置：位置取对方「切换屏幕时保存的布局属性」对应的槽位（左半屏 / 居中 ...），
+    -- 大小保持各自原来的 w/h 不变；属性识别不出时退回直接交换左上角坐标
+    local x1, y1 = positionForMode(layoutModeOf(prev), max, win, frame1.w, frame1.h)
+    local x2, y2 = positionForMode(layoutModeOf(win), max, prev, frame2.w, frame2.h)
+    if not x1 then x1, y1 = frame2.x, frame2.y end
+    if not x2 then x2, y2 = frame1.x, frame1.y end
 
-    local anchor1 = getAnchor(win, frame1)
-    local anchor2 = getAnchor(prev, frame2)
+    -- 保存状态以便还原
+    saveWindowState(win)
+    saveWindowState(prev)
 
-    local newX1 = applyAnchor({ w = frame1.w, h = frame1.h }, anchor2)
-    local newX2 = applyAnchor({ w = frame2.w, h = frame2.h }, anchor1)
-
-    -- 确保不超出可用区域
-    local max = getWinScreen(win)
-    local area = getUsableArea(max, win)
-    newX1 = math.max(area.x, math.min(newX1, area.x + area.w - frame1.w))
-    newX2 = math.max(area.x, math.min(newX2, area.x + area.w - frame2.w))
-
-    -- 只交换位置（x, y），各自保留原大小（w, h）
-    local newFrame1 = hs.geometry.rect(newX1, frame2.y, frame1.w, frame1.h)
-    local newFrame2 = hs.geometry.rect(newX2, frame1.y, frame2.w, frame2.h)
+    local newFrame1 = hs.geometry.rect(x1, y1, frame1.w, frame1.h)
+    local newFrame2 = hs.geometry.rect(x2, y2, frame2.w, frame2.h)
     setWinFrame(win, newFrame1)
     setWinFrame(prev, newFrame2)
 
-    -- 交换后，让现在处于居中位置的窗口获得焦点
-    local centerLine = area.x + area.w / 2
-    local isWinCentered = approx(newFrame1.x + newFrame1.w / 2, centerLine, 20)
-    local isPrevCentered = approx(newFrame2.x + newFrame2.w / 2, centerLine, 20)
-    if isWinCentered then
-        win:focus()
-    elseif isPrevCentered then
-        prev:focus()
+    if toFront then
+        -- 换成前面，并让它持有焦点，避免看得见的是前面那个、按键却落到后面那个
+        pcall(function() toFront:raise() end)
+        pcall(function() toFront:focus() end)
     end
 end
 
--- Ctrl+Option + X：与上一个焦点窗口交换位置
+-- Ctrl+Option + X：与上一个焦点窗口交换位置与前后层次（大小不变）
 hs.hotkey.bind(mash, "x", swapWithPreviousWindow)
