@@ -22,6 +22,7 @@ require("window_profile")  -- 窗口布局属性：屏幕变化后按属性重�
 require("capswriter")      -- CapsWriter 鼠标侧键触发录音（UDP 控制）
 require("notification_watch")  -- 通知监听：通知含「签到」时自动执行签到脚本
 require("keybindings")     -- 快捷键帮助面板 (Ctrl+Option+/)
+require("ocr_shot")        -- 截图 OCR 成 Markdown(LaTeX) (⇧⌘3)
 
 -- ============================================
 -- 启动提示
