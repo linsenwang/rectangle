@@ -159,10 +159,22 @@ gnome-extensions enable rectangle-window-manager@yangqian
 在 `config.lua` 中修改：
 ```lua
 TilingConfig = {
-    spacing = 0,        -- 默认间距
-    mode = "single",    -- 平铺模式
+    spacing = 0,          -- 默认间距
+    mode = "single",      -- 平铺模式
+    layout = "row",       -- 排布方式："row" 一排左右铺开（默认）/"grid" 网格
+    targetAspect = 1.6,   -- layout = "grid" 时的单元格理想宽高比（宽/高）
+    minWindowWidth = 600, -- 窗口最小宽度，窄于它时自动用负间距（重叠）
 }
 ```
+
+自动排布规则：
+- **默认排成一排**：`layout = "row"` 时所有窗口左右铺开（4 个窗口就是 1x4 一排）。
+  改成 `"grid"` 则按 `targetAspect` 选行列数（如 4 个窗口 2x2、3 个窗口 2x2 且最后一行居中）。
+- **宽度不足时自动重叠**：一排里每个窗口的单元格宽度小于 `minWindowWidth` 时，间距自动变负，
+  窗口保持该宽度并相互重叠（单边最多比单元格宽 1/4，重叠部分会被旁边的窗口盖住）。
+  例如 2560 宽的屏幕：4 个窗口时单元格 640px ≥ 600px，一排 4 个各 640px、互不重叠；
+  5 个窗口时单元格 512px < 600px，改为按 600px 宽、步进 490px 重叠排布，整排正好铺满。
+  设为 `0` 可关闭该行为。
 
 平铺模式：
 - `"single"` - 只在主显示器平铺所有窗口（默认）
@@ -284,8 +296,11 @@ EdgeDockConfig = {
 -- 4. 窗口平铺配置
 -- ============================================
 TilingConfig = {
-    spacing = 0,        -- 窗口间距
-    mode = "single",    -- 平铺模式
+    spacing = 0,          -- 窗口间距（负数表示重叠）
+    mode = "single",      -- 平铺模式
+    layout = "row",       -- 排布方式："row" 一排左右铺开 / "grid" 网格
+    targetAspect = 1.6,   -- layout = "grid" 时的单元格理想宽高比
+    minWindowWidth = 600, -- 单元格窄于该值时自动改用负间距；0 表示关闭
 }
 
 -- ============================================
