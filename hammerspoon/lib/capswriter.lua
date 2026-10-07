@@ -6,12 +6,16 @@
 
 local M = {}
 
+-- 鼠标侧键开关由全局配置 lib/config.lua 的 CapsWriterConfig 控制（没配到就视为开启）
+local capsWriterCfg = _G.CapsWriterConfig or {}
+
 -- 用户配置
 M.config = {
     host          = "127.0.0.1",   -- CapsWriter 监听地址
     port          = 6018,          -- CapsWriter 监听端口
     triggerButton = 4,             -- 触发录音的鼠标按钮：3=x1(后退), 4=x2(前进)
     suppress      = true,          -- true=拦截侧键，不让系统触发前进/后退
+    mouseEnabled  = capsWriterCfg.mouseEnabled ~= false,  -- 是否启用鼠标侧键（改 lib/config.lua 的 CapsWriterConfig）
     alertTimeout  = 0.8,           -- 提示显示时长（秒）
     statusPort    = 6019,          -- 监听 CapsWriter 处理状态回传的 UDP 端口
     -- 弹窗位置：atScreenEdge 0=居中 1=顶部 2=底部；alignment 可设 left/center/right
@@ -167,7 +171,7 @@ end)
 function M.start()
     local started = {}
 
-    if M.mouseTap and not M.mouseTap:isEnabled() then
+    if M.config.mouseEnabled and M.mouseTap and not M.mouseTap:isEnabled() then
         M.mouseTap:start()
         table.insert(started, "鼠标 Button " .. M.config.triggerButton)
     end
@@ -223,8 +227,9 @@ print("[CapsWriter] hs.allowAppleScript(true) result: " .. tostring(appleScriptR
 -- 自动启动
 M.start()
 
-print(string.format("[CapsWriter] 已加载 | host=%s:%d | button=%d | key=%s+%s | suppress=%s",
+print(string.format("[CapsWriter] 已加载 | host=%s:%d | button=%d | mouse=%s | key=%s+%s | suppress=%s",
     M.config.host, M.config.port, M.config.triggerButton,
+    tostring(M.config.mouseEnabled),
     table.concat(M.config.keyMods, "+"), M.config.keyTrigger,
     tostring(M.config.suppress)))
 
