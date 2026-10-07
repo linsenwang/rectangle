@@ -73,6 +73,32 @@ local function pickTwoWindows()
     return focused, (other or fallback), screen
 end
 
+-- 上一次拼接的结果：记住窗口对、各自宽度和左右顺序，供「再按一次」对调用
+-- widths 按窗口 id 保存每个窗口自己的宽度，对调后宽度保持不变
+local lastStitch = nil
+
+-- 两个窗口当前是否正好左右并排铺满整块屏幕（判断还能不能继续对调）
+local function isSideBySideFullscreen(winA, winB, sf)
+    local okA, fa = pcall(function() return winA:frame() end)
+    local okB, fb = pcall(function() return winB:frame() end)
+    if not okA or not okB or not fa or not fb then return false end
+
+    local function near(a, b)
+        return math.abs(a - b) < 2
+    end
+
+    local left, right
+    if fa.x <= fb.x then
+        left, right = fa, fb
+    else
+        left, right = fb, fa
+    end
+
+    return near(left.x, sf.x) and near(left.y, sf.y) and near(left.h, sf.h)
+        and near(right.x, sf.x + left.w) and near(right.y, sf.y) and near(right.h, sf.h)
+        and near(left.w + right.w, sf.w)
+end
+
 -- 拼接全屏
 function StitchFullscreen.stitch()
     local focused, other, screen = pickTwoWindows()
@@ -86,29 +112,50 @@ function StitchFullscreen.stitch()
         return
     end
 
-    -- 先取拼接前的几何：宽度比例和左右顺序都按原样来
-    local fa = focused:frame()
-    local fb = other:frame()
+    local sf = screen:frame()
+    local idA, idB = focused:id(), other:id()
 
-    -- 同一屏幕上按中心位置决定左右（靠左的留在左边）；重合或跨屏时当前窗口在左
-    local sameScreen = focused:screen() and other:screen()
-        and focused:screen():id() == other:screen():id()
-    local aLeft = true
-    if sameScreen then
-        aLeft = (fa.x + fa.w / 2) <= (fb.x + fb.w / 2)
-    end
+    -- 同一对窗口、同一屏幕，且当前正是上次拼出来的左右并排 → 这次改成左右对调
+    local ids = lastStitch and lastStitch.ids
+    local toggle = lastStitch ~= nil
+        and lastStitch.screenId == screen:id()
+        and lastStitch.widths[idA] and lastStitch.widths[idB]
+        and ((ids[1] == idA and ids[2] == idB) or (ids[1] == idB and ids[2] == idA))
+        and isSideBySideFullscreen(focused, other, sf)
 
     local leftWin, rightWin, leftW, rightW
-    if aLeft then
-        leftWin, rightWin = focused, other
-        leftW, rightW = fa.w, fb.w
+    if toggle then
+        -- 对调：上次在左边的这次去右边，宽度各自不变
+        if idA == ids[1] then
+            leftWin, rightWin = other, focused
+        else
+            leftWin, rightWin = focused, other
+        end
+        leftW = lastStitch.widths[leftWin:id()]
+        rightW = lastStitch.widths[rightWin:id()]
     else
-        leftWin, rightWin = other, focused
-        leftW, rightW = fb.w, fa.w
+        -- 第一次拼接：宽度比例和左右顺序都按窗口当前位置来
+        local fa = focused:frame()
+        local fb = other:frame()
+
+        -- 同一屏幕上按中心位置决定左右（靠左的留在左边）；重合或跨屏时当前窗口在左
+        local sameScreen = focused:screen() and other:screen()
+            and focused:screen():id() == other:screen():id()
+        local aLeft = true
+        if sameScreen then
+            aLeft = (fa.x + fa.w / 2) <= (fb.x + fb.w / 2)
+        end
+
+        if aLeft then
+            leftWin, rightWin = focused, other
+            leftW, rightW = fa.w, fb.w
+        else
+            leftWin, rightWin = other, focused
+            leftW, rightW = fb.w, fa.w
+        end
     end
 
-    -- 无视边距铺满整块屏幕：高度占满，宽度按两个窗口原来的宽度比例切分
-    local sf = screen:frame()
+    -- 无视边距铺满整块屏幕：高度占满，宽度按两个窗口的宽度比例切分
     local total = leftW + rightW
     local splitW = (total > 0) and math.floor(sf.w * leftW / total + 0.5) or math.floor(sf.w / 2)
     if splitW < 1 then splitW = 1 end
@@ -116,6 +163,16 @@ function StitchFullscreen.stitch()
 
     setWinFrame(leftWin, hs.geometry.rect(sf.x, sf.y, splitW, sf.h))
     setWinFrame(rightWin, hs.geometry.rect(sf.x + splitW, sf.y, sf.w - splitW, sf.h))
+
+    -- 记住这次的窗口对、各自宽度和左右顺序，下次按 F 就对调
+    lastStitch = {
+        ids = { leftWin:id(), rightWin:id() },
+        widths = {
+            [leftWin:id()] = leftW,
+            [rightWin:id()] = rightW,
+        },
+        screenId = screen:id(),
+    }
 
     notify("拼接全屏", string.format("左右拼接 %d%% / %d%%",
         math.floor(splitW / sf.w * 100 + 0.5),
