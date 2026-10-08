@@ -23,6 +23,7 @@ require("capswriter")      -- CapsWriter 鼠标侧键触发录音（UDP 控制�
 require("notification_watch")  -- 通知监听：通知含「签到」时自动执行签到脚本
 require("keybindings")     -- 快捷键帮助面板 (Ctrl+Option+/)
 require("ocr_shot")        -- 截图 OCR 成 Markdown(LaTeX) (⇧⌘3)
+require("keyboard_lock")   -- 键盘锁：Ctrl+L 启停锁定
 
 -- ============================================
 -- 启动提示
