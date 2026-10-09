@@ -22,6 +22,8 @@ M.config = {
     autoUnlockAfter = cfg.autoUnlockAfter or 0,     -- 锁定多久后自动解锁（秒），0 = 不自动解锁
     alertStyle      = { atScreenEdge = 1 },         -- 提示条贴在屏幕顶部，不挡视线
     flashTimeout    = 2.5,                          -- 锁定/解锁提示的显示时长（秒）
+    keyFlash        = cfg.keyFlash or "🔒",         -- 锁定期间按到按键闪出的提示（只放这个 emoji）
+    keyFlashTimeout = cfg.keyFlashTimeout or 0.5,   -- 上面这个 emoji 的显示时长（秒）
 }
 
 -- 事件类型 / 属性常量
@@ -45,6 +47,8 @@ end
 -- 内部状态
 local isLocked = false
 local flashUUID = nil            -- 当前提示条的 UUID
+local keyFlashShown = false      -- 按键提示（🔒）是否正在显示
+local keyFlashTimer = nil        -- 按键提示的复位计时器
 local autoUnlockTimer = nil
 
 -- ============================================
@@ -70,17 +74,38 @@ local function durationText(seconds)
 end
 
 -- 短暂提示（自动关闭上一条，避免叠在一起）
-local function flash(message)
+local function flash(message, timeout)
     if flashUUID then
         pcall(function() hs.alert.closeSpecific(flashUUID) end)
         flashUUID = nil
     end
-    local ok, uuid = pcall(hs.alert.show, message, M.config.alertStyle, M.config.flashTimeout)
+    local ok, uuid = pcall(hs.alert.show, message, M.config.alertStyle, timeout or M.config.flashTimeout)
     if ok then
         flashUUID = uuid
     else
         print("[KeyboardLock] 提示显示失败: " .. tostring(uuid))
     end
+end
+
+-- 锁定期间按到按键时闪出的提示（默认只有一个 🔒）
+-- 连续敲键时，上一条还在显示就不重建，避免「关掉再打开」造成的闪烁
+local function flashLockedKey()
+    if keyFlashShown then return end
+    keyFlashShown = true
+    flash(M.config.keyFlash, M.config.keyFlashTimeout)
+    keyFlashTimer = hs.timer.doAfter(M.config.keyFlashTimeout, function()
+        keyFlashShown = false
+        keyFlashTimer = nil
+    end)
+end
+
+-- 复位按键提示状态（锁定/解锁时调用，避免残留计时器）
+local function resetKeyFlash()
+    if keyFlashTimer then
+        keyFlashTimer:stop()
+        keyFlashTimer = nil
+    end
+    keyFlashShown = false
 end
 
 local function cancelAutoUnlock()
@@ -130,9 +155,11 @@ function M.lock(source)
     if isLocked then return end
     isLocked = true
 
+    resetKeyFlash()
     startAutoUnlock()
 
-    local hint = "🔒 键盘已锁定 · " .. comboText() .. " 解锁"
+    -- local hint = "🔒 键盘已锁定 · " .. comboText() .. " 解锁"
+    local hint = "🔒 键盘已锁定"
     local seconds = M.config.autoUnlockAfter
     if seconds and seconds > 0 then
         hint = hint .. "（" .. durationText(seconds) .. "后自动解锁）"
@@ -147,9 +174,10 @@ function M.unlock(source)
     isLocked = false
 
     cancelAutoUnlock()
+    resetKeyFlash()
     -- 重载/退出时不弹提示（马上就没了，弹出来只会晃一下）
     if source ~= "shutdown" then
-        flash(source == "timeout" and "🔓 已自动解锁（超时保护）" or "🔓 键盘已解锁")
+        flash(source == "timeout" and "🔓 已自动解锁（超时保护）" or "🔓 解锁")
     end
 
     print("[KeyboardLock] 已解锁 | source=" .. tostring(source))
@@ -180,8 +208,17 @@ local function handleEvent(event)
     if isLocked then
         if isToggleEvent(event) then
             M.unlock("hotkey")
+            return true
         end
-        -- 锁定期间一律吞掉（包括这次的按键），不让前台应用收到任何输入
+
+        -- 按到按键时闪一个 🔒，明确「键盘确实锁上了」：
+        -- 长按连发的重复事件不重复闪；音量/亮度等媒体键也闪
+        local etype = event:getType()
+        if (etype == KEY_DOWN and event:getProperty(AUTO_REPEAT) ~= 1) or etype == SYSTEM_DEFINED then
+            flashLockedKey()
+        end
+
+        -- 锁定期间一律吞掉，不让前台应用收到任何输入
         return true
     end
 

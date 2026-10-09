@@ -233,6 +233,8 @@ KeyboardLockConfig = {
     toggleKey       = "l",        -- 启停锁定的按键，即 Ctrl+L
     blockMediaKeys  = true,       -- 是否连音量/亮度等媒体键一起拦截
                                   -- （true 时锁定期间按音量键不会有反应）
+    keyFlash        = "🔒",        -- 锁定期间按到按键时闪出的提示（只显示这一个 emoji）
+    keyFlashTimeout = 0.5,         -- 上面这个 emoji 的显示时长（秒）
     autoUnlockAfter = 0,          -- 锁定超过该秒数后自动解锁（0 = 不自动解锁，默认）
                                   -- 不自动解锁时，万一启停键失灵：Hammerspoon 菜单栏图标
                                   -- → Reload Config（重载即解锁，见 lib/keyboard_lock.lua）
