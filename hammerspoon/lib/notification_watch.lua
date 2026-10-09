@@ -238,7 +238,18 @@ local function runCommand(reason)
         notify("检测到签到通知", "正在执行 " .. (command:match("[^/]+$") or command))
     end
 
-    -- 继承 Hammerspoon 进程的环境（PATH 为 /usr/bin:/bin:/usr/sbin:/sbin，脚本够用）
+    -- Hammerspoon 继承的是 launchd 的最小环境，PATH 只有 /usr/bin:/bin:/usr/sbin:/sbin，
+    -- 而签到链路要用 homebrew 的 sqlcipher 解密 QQ 库；缺了它 export_qq_chat.py 会直接
+    -- 报「未找到 sqlcipher」退出，看起来就像「读不到 QQ 数据」。这里先补一段 PATH 再 exec，
+    -- 其余环境（HOME 等）照旧继承，不做替换。
+    local extraPath = cfg().extraPath
+    if extraPath == nil then extraPath = "/opt/homebrew/bin:/usr/local/bin" end
+
+    local shellCmd = command
+    if extraPath ~= "" then
+        shellCmd = string.format('export PATH="%s:$PATH"; exec %s', extraPath, command)
+    end
+
     local task = hs.task.new("/bin/bash", function(code, _, err)
         runningTask = nil
         if code == 0 then
@@ -247,7 +258,7 @@ local function runCommand(reason)
             log("命令执行失败（exit %s）：%s", tostring(code), tostring(err))
             notify("签到脚本失败", "exit " .. tostring(code))
         end
-    end, {command})
+    end, {"-c", shellCmd})
 
     if not task then
         log("创建任务失败：%s", command)

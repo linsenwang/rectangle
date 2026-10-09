@@ -214,6 +214,10 @@ NotificationWatchConfig = {
     enabled = true,              -- 是否启用监听
     keywords = {"签到"},          -- 通知文本命中任一关键词即触发（应用名/标题/副标题/正文都会匹配）
     command = "/Users/yangqian/Downloads/unified_export/rollcall/rollcall_checkin.sh",
+    -- 执行 command 前补进 PATH 的目录（冒号分隔）；Hammerspoon 继承的是 launchd 的
+    -- 最小环境，PATH 只有 /usr/bin:/bin:/usr/sbin:/sbin，而签到链路要用 homebrew 的
+    -- sqlcipher 解密 QQ 库，缺了它会直接报「未找到 sqlcipher」退出。留空表示不修改 PATH。
+    extraPath = "/opt/homebrew/bin:/usr/local/bin",
     cooldown = 60,               -- 两次触发之间的最小间隔（秒），避免事件风暴重复执行
     healthCheckInterval = 300,   -- 观察者健康检查间隔（秒），0 表示不检查
                                  -- 监听本身是事件驱动的（有通知才唤醒），这里只是防止观察者被系统断开后失联
