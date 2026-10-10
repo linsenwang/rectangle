@@ -28,29 +28,9 @@ local themes = {
     }
 }
 
--- 获取当前应使用的主题名
+-- 主题名：复用统一弹窗模块的外观检测，全项目保持一处定义
 local function currentThemeName()
-    -- 方法1：Hammerspoon 原生 API
-    local style = hs.host.interfaceStyle()
-    if style == "Light" then
-        return "light"
-    elseif style == "Dark" then
-        return "dark"
-    end
-
-    -- 方法2：回退到 defaults 命令（interfaceStyle 返回 nil 或 Unknown 时）
-    local ok, result = pcall(function()
-        return hs.execute("defaults read -g AppleInterfaceStyle 2>/dev/null")
-    end)
-    if ok and result then
-        result = string.lower(string.gsub(result, "%s+", ""))
-        if result == "dark" then
-            return "dark"
-        end
-    end
-
-    -- defaults 命令不存在/无输出时，系统实际为浅色模式
-    return "light"
+    return Alert.appearance()
 end
 
 -- 按键绑定列表

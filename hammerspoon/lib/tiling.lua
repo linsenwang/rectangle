@@ -59,7 +59,7 @@ function TileManager.cycleMode()
     TileManager.config.mode = modes[nextIdx]
     
     -- 屏幕中央大提示
-    hs.alert.show("平铺: " .. modeNames[TileManager.config.mode], 1.5)
+    Alert.show("平铺: " .. modeNames[TileManager.config.mode], { timeout = 1.5 })
 end
 
 -- 获取平铺用的屏幕区域

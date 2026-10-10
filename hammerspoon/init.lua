@@ -11,6 +11,7 @@ pcall(function() require("hs.ipc") end)
 
 -- 按依赖顺序加载模块
 require("config")          -- 配置、边距、工具函数
+require("alert")           -- 统一弹窗（需早于其它模块加载）
 require("rectangle")       -- 窗口管理核心（半屏/全屏/居中/四角等）
 require("layout")          -- 布局保存/恢复
 require("edge_dock")       -- Edge Dock（必须在 tiling 之前加载）
@@ -84,7 +85,7 @@ hs.hotkey.bind({"ctrl", "alt", "cmd"}, "i", function()
     end
     
     local msg = table.concat(info, "\n\n")
-    hs.alert.show(msg, 4)
+    Alert.show(msg, { timeout = 4 })
     print("[ScreenInfo]\n" .. msg)
 end)
 

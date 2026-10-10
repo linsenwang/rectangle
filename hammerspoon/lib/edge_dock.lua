@@ -23,14 +23,9 @@ EdgeDock = {
 -- 缓存应用颜色
 EdgeDock.appColorCache = {}
 
--- 检测当前外观模式（深色/浅色）
--- 使用原生 API，避免每次 fork shell
+-- 检测当前外观模式（深色/浅色），复用统一弹窗模块的检测逻辑
 function EdgeDock.getAppearanceMode()
-    local ok, style = pcall(hs.host.interfaceStyle)
-    if ok and style then
-        return string.lower(style)
-    end
-    return "light"
+    return Alert.appearance()
 end
 
 -- 获取当前模式的颜色配置

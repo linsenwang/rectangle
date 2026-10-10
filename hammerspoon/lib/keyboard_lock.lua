@@ -20,7 +20,6 @@ M.config = {
     key             = cfg.toggleKey or "l",         -- 启停锁定的按键（hs.keycodes.map 里的名字）
     blockMediaKeys  = cfg.blockMediaKeys ~= false,  -- 是否连音量/亮度等媒体键一起拦
     autoUnlockAfter = cfg.autoUnlockAfter or 0,     -- 锁定多久后自动解锁（秒），0 = 不自动解锁
-    alertStyle      = { atScreenEdge = 1 },         -- 提示条贴在屏幕顶部，不挡视线
     flashTimeout    = 2.5,                          -- 锁定/解锁提示的显示时长（秒）
     keyFlash        = cfg.keyFlash or "🔒",         -- 锁定期间按到按键闪出的提示（只放这个 emoji）
     keyFlashTimeout = cfg.keyFlashTimeout or 0.5,   -- 上面这个 emoji 的显示时长（秒）
@@ -46,7 +45,6 @@ end
 
 -- 内部状态
 local isLocked = false
-local flashUUID = nil            -- 当前提示条的 UUID
 local keyFlashShown = false      -- 按键提示（🔒）是否正在显示
 local keyFlashTimer = nil        -- 按键提示的复位计时器
 local autoUnlockTimer = nil
@@ -73,18 +71,13 @@ local function durationText(seconds)
     return string.format("%d 秒", math.floor(seconds))
 end
 
--- 短暂提示（自动关闭上一条，避免叠在一起）
+-- 短暂提示（顶部贴边；同通道新提示自动顶掉旧的，避免叠在一起）
 local function flash(message, timeout)
-    if flashUUID then
-        pcall(function() hs.alert.closeSpecific(flashUUID) end)
-        flashUUID = nil
-    end
-    local ok, uuid = pcall(hs.alert.show, message, M.config.alertStyle, timeout or M.config.flashTimeout)
-    if ok then
-        flashUUID = uuid
-    else
-        print("[KeyboardLock] 提示显示失败: " .. tostring(uuid))
-    end
+    Alert.show(message, {
+        channel = "keyboard_lock",
+        edge    = 1,
+        timeout = timeout or M.config.flashTimeout,
+    })
 end
 
 -- 锁定期间按到按键时闪出的提示（默认只有一个 🔒）

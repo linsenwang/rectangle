@@ -667,7 +667,7 @@ local function moveToOtherScreen()
 
     local targetScreen = getNextScreen(currentScreen)
     if not targetScreen then
-        hs.alert.show("只有一个显示器", 1)
+        Alert.show("只有一个显示器", { timeout = 1 })
         return
     end
 
@@ -799,7 +799,7 @@ end
 local function swapWithPreviousWindow()
     local win = hs.window.focusedWindow()
     if not win then
-        hs.alert.show("没有当前窗口", 1)
+        Alert.show("没有当前窗口", { timeout = 1 })
         return
     end
 
@@ -808,12 +808,12 @@ local function swapWithPreviousWindow()
         return prev and prev:isStandard()
     end)
     if not ok or not isPrevValid then
-        hs.alert.show("没有上一个焦点窗口", 1)
+        Alert.show("没有上一个焦点窗口", { timeout = 1 })
         return
     end
 
     if prev:id() == win:id() then
-        hs.alert.show("没有可交换的窗口", 1)
+        Alert.show("没有可交换的窗口", { timeout = 1 })
         return
     end
 
@@ -821,7 +821,7 @@ local function swapWithPreviousWindow()
     local screen1 = win:screen()
     local screen2 = prev:screen()
     if not screen1 or not screen2 or screen1:id() ~= screen2:id() then
-        hs.alert.show("窗口不在同一屏幕，无法交换", 1)
+        Alert.show("窗口不在同一屏幕，无法交换", { timeout = 1 })
         return
     end
 

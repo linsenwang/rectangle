@@ -475,14 +475,14 @@ hs.hotkey.bind(mashShift, "f", function()
             snapshot(win)
             record(win)
         end
-        hs.alert.show("布局属性：自动识别（" .. WindowProfile.describe(WindowProfile.tags[id]) .. "）", 1.5)
+        Alert.show("布局属性：自动识别（" .. WindowProfile.describe(WindowProfile.tags[id]) .. "）", { timeout = 1.5 })
     else
         local frame, max = meaningfulGeometry(win)
         if not frame then return end
         local mode = freeMode(frame, max)
         mode.pinned = true
         WindowProfile.tags[id] = mode
-        hs.alert.show("布局属性：自由（按屏幕比例适配）", 1.5)
+        Alert.show("布局属性：自由（按屏幕比例适配）", { timeout = 1.5 })
     end
 end)
 

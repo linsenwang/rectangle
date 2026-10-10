@@ -11,24 +11,22 @@ M.config = {
     hotkey       = {"cmd", "shift"},                                  -- 修饰键
     key          = "3",                                               -- 触发键
     script       = os.getenv("HOME") .. "/Downloads/local_ocr/ocr",   -- 拉框截图 + 识别
-    extraArgs    = "--no-notify",                                     -- 提示交给 hs.alert，不再叠系统通知
+    extraArgs    = "--no-notify",                                     -- 提示交给统一弹窗，不再叠系统通知
     autoPaste    = true,                                              -- 识别成功后自动按 ⌘V 粘到当前焦点
-    -- 弹窗位置：atScreenEdge 0=居中 1=顶部 2=底部；alignment 可设 left/center/right
-    alertStyle   = { atScreenEdge = 1 },
     alertTimeout = 3.0,                                               -- 结果提示时长（秒）
     previewLen   = 160,                                               -- 提示里预览多少字符
 }
 
 -- 内部状态
 local running = false            -- 同一时间只允许跑一次
-local lastAlertUUID = nil        -- 上一个悬浮窗的 UUID，用于关闭避免重叠
 
--- 显示提示（自动关闭上一个，避免重叠）
+-- 显示提示（顶部贴边；同通道新提示自动顶掉旧的，避免重叠）
 local function showAlert(message, timeout)
-    if lastAlertUUID then
-        pcall(function() hs.alert.closeSpecific(lastAlertUUID) end)
-    end
-    lastAlertUUID = hs.alert.show(message, M.config.alertStyle, nil, timeout or M.config.alertTimeout)
+    Alert.show(message, {
+        channel = "ocr",
+        edge    = 1,
+        timeout = timeout or M.config.alertTimeout,
+    })
 end
 
 -- 把多行输出压成一行短预览

@@ -76,7 +76,7 @@ function DisplayLayoutManager.saveLayout(showNotify)
     
     if showNotify then
         notify("显示器布局", "已保存当前布局 (" .. #layout .. " 个窗口)")
-        hs.alert.show("显示器布局已保存\n" .. #layout .. " 个窗口", 1.5)
+        Alert.show("显示器布局已保存\n" .. #layout .. " 个窗口", { timeout = 1.5 })
     end
 end
 
@@ -210,7 +210,7 @@ function DisplayLayoutManager.restoreLayout(targetConfig)
     
     if restoredCount > 0 then
         notify("显示器布局", string.format("已恢复 %d 个窗口", restoredCount))
-        hs.alert.show(string.format("显示器布局已恢复\n%d 个窗口", restoredCount), 1.5)
+        Alert.show(string.format("显示器布局已恢复\n%d 个窗口", restoredCount), { timeout = 1.5 })
         print("[DisplayLayout] 恢复完成: " .. restoredCount .. "/" .. #layout .. " 个窗口")
     end
     

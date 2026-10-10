@@ -38,7 +38,7 @@ local function ensureBinary()
     if hs.fs.attributes(BIN) then
         return true
     end
-    hs.alert.show("WindowOCR 未找到，请先运行 window-context/start.sh", 5)
+    Alert.show("WindowOCR 未找到，请先运行 window-context/start.sh", { timeout = 5 })
     return false
 end
 
@@ -181,9 +181,9 @@ if menu then
     menu:setClickCallback(function()
         getWindowContext(function(data)
             if data and data.summary and data.summary ~= "" then
-                hs.alert.show(data.summary, 4)
+                Alert.show(data.summary, { timeout = 4 })
             else
-                hs.alert.show("暂无窗口上下文", 2)
+                Alert.show("暂无窗口上下文", { timeout = 2 })
             end
         end)
     end)

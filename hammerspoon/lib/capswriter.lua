@@ -16,10 +16,8 @@ M.config = {
     triggerButton = 4,             -- 触发录音的鼠标按钮：3=x1(后退), 4=x2(前进)
     suppress      = true,          -- true=拦截侧键，不让系统触发前进/后退
     mouseEnabled  = capsWriterCfg.mouseEnabled ~= false,  -- 是否启用鼠标侧键（改 lib/config.lua 的 CapsWriterConfig）
-    alertTimeout  = 0.8,           -- 提示显示时长（秒）
+    alertTimeout  = 0.8,           -- 弹窗显示时长（秒）
     statusPort    = 6019,          -- 监听 CapsWriter 处理状态回传的 UDP 端口
-    -- 弹窗位置：atScreenEdge 0=居中 1=顶部 2=底部；alignment 可设 left/center/right
-    alertStyle    = { atScreenEdge = 1, textStyle = { alignment = "right" } },
 
     -- 键盘快捷键配置（按住录音，松开停止）
     keyMods       = {"shift"},     -- 修饰键数组，如 {"shift"}, {"cmd", "alt"}
@@ -29,16 +27,17 @@ M.config = {
 
 -- 内部状态
 local isRecording = false
-local lastAlertUUID = nil        -- 上一个悬浮窗的 UUID，用于关闭避免重叠
 local udpClient = nil            -- 发送命令的 UDP socket
 local statusSocket = nil         -- 接收状态回传的 UDP socket
 
--- 显示提示（自动关闭上一个，避免重叠）
+-- 显示提示（顶部贴边、右对齐；同通道新提示自动顶掉旧的，避免重叠）
 local function showAlert(message, timeout)
-    if lastAlertUUID then
-        pcall(function() hs.alert.closeSpecific(lastAlertUUID) end)
-    end
-    lastAlertUUID = hs.alert.show(message, M.config.alertStyle, nil, timeout or M.config.alertTimeout)
+    Alert.show(message, {
+        channel = "capswriter",
+        edge    = 1,
+        align   = "right",
+        timeout = timeout or M.config.alertTimeout,
+    })
 end
 
 -- 发送 UDP 命令（使用原生 hs.socket.udp，无 shell fork）
