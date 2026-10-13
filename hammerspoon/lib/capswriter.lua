@@ -23,10 +23,21 @@ M.config = {
     keyMods       = {"shift"},     -- 修饰键数组，如 {"shift"}, {"cmd", "alt"}
     keyTrigger    = "right",       -- 触发键名，如 "right", "f5", "space"
     keyEnabled    = true,          -- 是否启用键盘快捷键
+
+    -- 客户端自动拉起（改 lib/config.lua 的 CapsWriterConfig）
+    -- macOS 上只有 GUI 应用（Hammerspoon / 终端）拉起的进程才有麦克风权限，
+    -- pm2、登录项等 launchd 服务拉起的进程会被系统静音（峰值恒为 0），所以由这里负责启动。
+    autoStart     = capsWriterCfg.autoStart ~= false,     -- 未运行时是否自动拉起客户端
+    clientPython  = capsWriterCfg.clientPython  or "/Users/yangqian/miniconda3/bin/python",
+    clientScript  = capsWriterCfg.clientScript  or "/Users/yangqian/Downloads/local_asr/CapsWriter-Offline/core_client.py",
+    clientWorkDir = capsWriterCfg.clientWorkDir or "/Users/yangqian/Downloads/local_asr/CapsWriter-Offline",
+    clientLog     = capsWriterCfg.clientLog     or "logs/client_stdout.log",  -- 相对 clientWorkDir
+    startTimeout  = capsWriterCfg.startTimeout  or 45,    -- 等待客户端就绪的最长秒数
 }
 
 -- 内部状态
 local isRecording = false
+local pressSeq = 0               -- 按键序号：松开时自增，用于丢弃"按下→检查完成"之间已松开的请求
 local udpClient = nil            -- 发送命令的 UDP socket
 local statusSocket = nil         -- 接收状态回传的 UDP socket
 
@@ -113,18 +124,109 @@ local function stopStatusListener()
     end
 end
 
+-- ========== 客户端自动拉起 ==========
+-- 判断客户端是否已就绪：UDP 6018 被占用 = 能接收 START/STOP
+local function checkClientReady(callback)
+    hs.task.new("/usr/sbin/lsof", function(exitCode, stdout)
+        local ready = false
+        if exitCode == 0 and stdout then
+            for line in stdout:gmatch("[^\r\n]+") do
+                -- 跳过自己那条 "本地端口->127.0.0.1:6018" 的连接记录，只看被监听的端口
+                if not line:find("->") and line:match("UDP%s+%S+:" .. M.config.port .. "%s*$") then
+                    ready = true
+                    break
+                end
+            end
+        end
+        callback(ready)
+    end, {"-nP", "-iUDP:" .. M.config.port}):start()
+end
+
+-- 拉起客户端（逐出到 launchd 名下，配置重载或 Hammerspoon 退出后仍然存活）
+-- 两个坑：
+--   1) hs.execute 会同步等待子进程的 stdout 管道关闭，所以必须用 (...) >> 日志 2>&1 < /dev/null &
+--      把后台子进程的标准流全部接管，否则子 shell 一直攥着管道，Hammerspoon 主线程会永久卡死
+--   2) 对 (...) 的重定向是在外层 shell 的工作目录下解析的，不受里面 cd 影响，所以日志必须用绝对路径
+local function spawnClient()
+    local logPath = M.config.clientLog
+    if logPath:sub(1, 1) ~= "/" then
+        logPath = M.config.clientWorkDir .. "/" .. logPath
+    end
+
+    local cmd = string.format(
+        '(cd "%s" && exec "%s" "%s") >> "%s" 2>&1 < /dev/null &',
+        M.config.clientWorkDir, M.config.clientPython,
+        M.config.clientScript, logPath)
+    hs.execute(cmd)
+    print("[CapsWriter] 已拉起客户端: " .. M.config.clientScript .. " >> " .. logPath)
+end
+
+-- 确保客户端在运行；未运行时自动拉起并轮询等待就绪
+-- onResult(ready, starting)：ready=现在就能收 START，starting=正在启动中
+local function ensureClientRunning(onResult)
+    local function report(ready, starting)
+        if onResult then onResult(ready, starting) end
+    end
+
+    checkClientReady(function(ready)
+        if ready then
+            report(true, false)
+            return
+        end
+        if not M.config.autoStart then
+            report(false, false)
+            return
+        end
+
+        showAlert("⏳ CapsWriter 未运行，正在后台启动…", 2)
+        spawnClient()
+
+        local deadline = os.time() + M.config.startTimeout
+        local poller
+        poller = hs.timer.doEvery(1, function()
+            checkClientReady(function(ok)
+                if ok then
+                    poller:stop()
+                    showAlert("✅ CapsWriter 已就绪，可以说话了", 2)
+                    print("[CapsWriter] 客户端已就绪")
+                elseif os.time() > deadline then
+                    poller:stop()
+                    showAlert("❌ CapsWriter 启动失败，请查看客户端日志", 3)
+                    print("[CapsWriter] 客户端启动超时")
+                end
+            end)
+        end)
+
+        report(false, true)
+    end)
+end
+
 -- 开始录音（带来源标记防止重复触发）
+-- 先确认客户端在运行，未运行则自动拉起，本次按键不录音
 local function startRecording(source)
-    if not isRecording then
+    if isRecording then return end
+
+    pressSeq = pressSeq + 1
+    local mySeq = pressSeq
+
+    ensureClientRunning(function(ready, starting)
+        if mySeq ~= pressSeq then return end      -- 检查期间已松手，丢弃这次
+        if not ready then
+            if not starting then
+                showAlert("❌ CapsWriter 未运行（自动启动已关闭）", 2)
+            end
+            return
+        end
         sendUDP("START")
         isRecording = true
         showAlert("🎙️ 录音开始")
         print(string.format("[CapsWriter] 录音开始 | source=%s", source))
-    end
+    end)
 end
 
 -- 停止录音（带来源标记）
 local function stopRecording(source)
+    pressSeq = pressSeq + 1                       -- 作废尚未完成的 START
     if isRecording then
         sendUDP("STOP")
         isRecording = false
@@ -182,6 +284,9 @@ function M.start()
 
     -- 启动 UDP 状态监听
     startStatusListener()
+
+    -- 客户端没在跑就拉起来（Hammerspoon 启动/重载时各执行一次，用于开机后自动就绪）
+    ensureClientRunning(nil)
 
     if #started > 0 then
         showAlert("🎙️ CapsWriter 监听已启动 | " .. table.concat(started, ", "), 2)

@@ -12,7 +12,7 @@ M.config = {
     key          = "3",                                               -- 触发键
     script       = os.getenv("HOME") .. "/Downloads/local_ocr/ocr",   -- 拉框截图 + 识别
     extraArgs    = "--no-notify",                                     -- 提示交给统一弹窗，不再叠系统通知
-    autoPaste    = true,                                              -- 识别成功后自动按 ⌘V 粘到当前焦点
+    autoPaste    = false,                                              -- 识别成功后自动按 ⌘V 粘到当前焦点
     alertTimeout = 3.0,                                               -- 结果提示时长（秒）
     previewLen   = 160,                                               -- 提示里预览多少字符
 }

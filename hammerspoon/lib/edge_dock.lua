@@ -535,6 +535,7 @@ function EdgeDock.saveState()
             winTitle = winTitle,
             winId = winId,  -- 保存窗口 ID（虽然重启后会失效，但休眠/唤醒有用）
             screenId = slot.screenId,  -- 保存窗口原本所在的屏幕
+            mode = slot.mode,  -- 布局属性：重启后直接用，不必再从 originalFrame 反推
             originalFrame = {
                 x = slot.originalFrame.x,
                 y = slot.originalFrame.y,
@@ -719,6 +720,7 @@ function EdgeDock.restoreState()
                             win = targetWin,
                             winId = targetWin:id(),
                             originalFrame = frame,
+                            mode = item.mode,  -- 布局属性：状态文件里有就用它（老状态文件没有则为 nil，之后按 frame 反推一次）
                             currentSize = {w = effW, h = effH},  -- 记录当前尺寸（saveWindowSize=false 时使用）
                             appName = item.appName,
                             isShowing = false,
@@ -798,6 +800,13 @@ function EdgeDock.dockWindow(win, slotIndex, options)
     
     local app = win:application()
     local frame = win:frame()
+
+    -- 停靠瞬间用「停靠前的真实 frame」记录一次布局属性，之后槽位以它为准；
+    -- 不再拿 slot.originalFrame 反推属性（属性与恢复目标互相引用会一起被换屏残留值污染）
+    local layoutMode = nil
+    if WindowProfile and WindowProfile.captureDock then
+        layoutMode = WindowProfile.captureDock(win, frame)
+    end
     
     -- 使用窗口自身所在的屏幕（支持多显示器，避免跟随鼠标漂移）
     local winScreenObj = win:screen()
@@ -835,6 +844,7 @@ function EdgeDock.dockWindow(win, slotIndex, options)
         winId = win:id(),
         winTitle = win:title() or "",  -- 保存窗口标题用于恢复时匹配
         originalFrame = frame,
+        mode = layoutMode,  -- 布局属性（停靠时记录；屏幕变化后按它重算恢复目标，并随状态文件落盘）
         currentSize = {w = frame.w, h = frame.h},  -- 记录停靠时的尺寸（saveWindowSize=false 时用于允许用户调整大小）
         appName = app and app:name() or "?",
         isShowing = shouldShow,

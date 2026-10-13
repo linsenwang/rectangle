@@ -11,8 +11,15 @@
 -- 识别不出固定布局的窗口记为「自由」，按屏幕相对比例适配；
 -- ⌃⌥⇧F 可以把窗口固定为「自由」，再按一次恢复自动识别。
 --
--- Edge Dock 槽位里的窗口被藏在屏幕外，属性按槽位记录的「停靠前 frame」推断；
--- 显示器变化后重算槽位的恢复目标，从 Dock 恢复（⌃⌥⌘ 1~9）时按属性落到新屏幕。
+-- 两条重要规则：
+--   1. 记录下来的属性是权威：应用属性后回读校验，几何对不上属性就按属性摆回去
+--      （换屏后 macOS 会把窗口原样搬到新屏、尺寸还是旧屏的像素值，这种残留几何不算「属性」）
+--   2. 换屏/重排刚结束的一小段时间里只更新几何快照、不改属性：否则系统搬过来的残留几何
+--      会被记成新属性（例如「自由 relH=0.85」），从此每次换屏都按这个错比例算，再也回不到全高
+--
+-- Edge Dock 槽位里的窗口被藏在屏幕外，属性在「停靠瞬间」用停靠前的真实 frame 记录一次，
+-- 之后槽位以它为准（同时写进状态文件）；显示器变化后按属性重算恢复目标，
+-- 从 Dock 恢复（⌃⌥⌘ 1~9）时落到新屏幕。
 -- ============================================
 
 WindowProfile = {
@@ -24,6 +31,8 @@ WindowProfile = {
     dockStateDirty = false,  -- Edge Dock 槽位恢复目标被修正过，需要落盘
     recordDelay = 0.4,  -- 窗口停止变化后多久记录（等 AX 生效、合并连续事件）
     reapplyDelay = 1.2, -- 显示器变化后多久按属性重新布局
+    settleExtra = 3,    -- 换屏后额外压制记录属性的时间（秒）：挡住系统搬窗口产生的残留几何
+    frameTolerance = 4, -- 回读校验的容差（像素）：应用尺寸时应用/系统可能取整
 }
 
 -- ============================================
@@ -36,6 +45,24 @@ end
 
 local function sameRect(a, b)
     return a and b and a.x == b.x and a.y == b.y and a.w == b.w and a.h == b.h
+end
+
+-- 换屏（或按属性重排）刚过去的一小段时间：这期间的窗口几何可能还是系统搬过来的残留值，
+-- 只允许更新快照，不允许把它记成新的布局属性
+local function taggingSuppressed()
+    return WindowProfile.pending or now() < WindowProfile.suppressUntil
+end
+
+-- 窗口当前几何是否已经是「该属性应有的样子」（按属性重排时判断要不要动手）
+local function matchesMode(win, mode, screen)
+    if not mode or not screen then return false end
+    local target = layoutFrameFor(mode, screen:frame(), win)
+    if not target then return false end
+    local frame = win:frame()
+    if not frame then return false end
+    local t = WindowProfile.frameTolerance or 4
+    return approx(frame.x, target.x, t) and approx(frame.y, target.y, t)
+       and approx(frame.w, target.w, t) and approx(frame.h, target.h, t)
 end
 
 -- 参与布局属性管理的窗口：跳过非标准窗口和最小化窗口
@@ -135,8 +162,10 @@ local function snapshot(win)
     }
 end
 
--- 槽位窗口的布局属性：用槽位记录的「停靠前 frame」推断（窗口自身已经被藏到屏幕外）
+-- 槽位窗口的布局属性：优先用「停靠瞬间」记录在槽位上的属性；
+-- 只有从状态文件恢复、槽位还没带属性的旧数据才用「停靠前 frame」反推（窗口自身已被藏到屏幕外）
 local function recordDocked(slot, slotIndex)
+    if taggingSuppressed() then return end
     local win = slotWindow(slot)
     local id = win and win:id()
     local frame = slot and slot.originalFrame
@@ -166,15 +195,19 @@ local function recordDocked(slot, slotIndex)
         local mode = freeMode(frame, max)
         mode.pinned = true
         WindowProfile.tags[id] = mode
+        slot.mode = mode
         return
     end
 
-    WindowProfile.tags[id] = detectLayoutModeForFrame(frame, max, win)
-        or freeMode(frame, max)
+    local mode = slot.mode or detectLayoutModeForFrame(frame, max, win) or freeMode(frame, max)
+    WindowProfile.tags[id] = mode
+    slot.mode = mode
 end
 
 -- 记录窗口当前的布局属性（几何形状 → 属性）
 local function record(win)
+    if taggingSuppressed() then return end
+
     local slot, slotIndex = dockSlotOf(win)
     if slot then
         recordDocked(slot, slotIndex)
@@ -282,17 +315,31 @@ function WindowProfile.apply(win, mode)
     local snap = WindowProfile.snapshots[id]
 
     if not mode then
-        -- 屏幕尺寸没变就不动它，避免无谓的 setFrame 抖动
-        if sameRect(snap and snap.screen, max) then return false end
-        mode = WindowProfile.tags[id]
-        if not mode then
-            if not snap then return false end
+        local recorded = WindowProfile.tags[id]
+        if recorded then
+            -- 有属性就以属性为准：几何已经符合属性就不动它（避免无谓的 setFrame 抖动），
+            -- 不符合就摆回去 —— 换屏后系统搬过来的残留几何、应用自己改尺寸都会命中这里
+            if matchesMode(win, recorded, screen) then return false end
+            mode = recorded
+        else
+            -- 没属性：只能靠「上次记录的屏幕」判断是否换屏，变了就按相对比例适配
+            if not snap or sameRect(snap.screen, max) then return false end
             mode = freeMode(snap.frame, snap.screen)
         end
     end
 
     WindowProfile.suppressUntil = now() + 0.8
     applyLayoutMode(win, mode, screen)
+
+    -- 回读校验：应用/系统可能钳住尺寸（最小/最大尺寸限制），只写一次就当作完成会让
+    -- 「按属性重排」静默失效。隔一小会儿确认一次，还是不对就补写一次（只重试一次，不循环）
+    hs.timer.doAfter(0.2, function()
+        if not isManaged(win) or dockSlotOf(win) then return end
+        local s = win:screen()
+        if not s or matchesMode(win, mode, s) then return end
+        WindowProfile.suppressUntil = now() + 0.8
+        applyLayoutMode(win, mode, s)
+    end)
     return true
 end
 
@@ -318,13 +365,23 @@ function WindowProfile.applyDocked(slot, slotIndex)
         refMax = refScreen and refScreen:frame()
     end
 
-    -- 有属性就按属性算；没有属性就按参考屏幕的比例换算；
-    -- 参考屏幕也没有（历史状态里存过屏幕外的隐藏坐标）时按目标屏幕钳回屏幕内
-    local mode = WindowProfile.tags[id] or freeMode(slot.originalFrame, refMax or targetScreen:frame())
+    -- 属性优先级：手动固定为「自由」的窗口 > 槽位自带的（停靠时记录）> 窗口属性表
+    -- > 按参考屏幕比例换算；参考屏幕也没有（历史状态里存过屏幕外的隐藏坐标）时按目标屏幕钳回屏幕内
+    local recorded = WindowProfile.tags[id]
+    local mode
+    if recorded and recorded.pinned then
+        mode = recorded
+    else
+        mode = slot.mode or recorded or freeMode(slot.originalFrame, refMax or targetScreen:frame())
+    end
 
     local target = layoutFrameFor(mode, targetScreen:frame(), win)
     if not target then return false end
     local changed = not sameRect(slot.originalFrame, target)
+
+    -- 槽位与窗口属性表保持同一个属性，槽位的那份会被写进状态文件（重启后不必再反推）
+    slot.mode = mode
+    WindowProfile.tags[id] = mode
 
     -- 窗口正在预览显示时先收回屏幕外，避免下次隐藏仍用旧屏幕坐标
     if slot.isShowing and not slot.centeredPaused then
@@ -383,9 +440,12 @@ function WindowProfile.reapplyAll()
 end
 
 -- 安排一次按属性重排（显示器变化后调用，去抖）
+-- 同时压制这一段（含重排之后一小段）的属性记录：系统搬窗口产生的残留几何不算属性
 function WindowProfile.scheduleReapply(delay)
+    local wait = delay or WindowProfile.reapplyDelay
     WindowProfile.pending = true
-    WindowProfile.reapplyTimer:start(delay or WindowProfile.reapplyDelay)
+    WindowProfile.suppressUntil = now() + wait + (WindowProfile.settleExtra or 1.5)
+    WindowProfile.reapplyTimer:start(wait)
 end
 
 -- 全量记录一遍（启动时和兜底轮询用）
@@ -417,6 +477,36 @@ function WindowProfile.recordAll()
     return count
 end
 
+-- Edge Dock 停靠瞬间记录属性：用「停靠前的真实 frame」识别一次属性，
+-- 之后槽位以它为准（并随状态文件落盘），不再拿 slot.originalFrame 反推 ——
+-- 否则属性和恢复目标互相引用，originalFrame 一旦是换屏残留值就会永远锁死
+-- @return 识别出的属性（调用方应存到 slot.mode）
+function WindowProfile.captureDock(win, frame)
+    if not win or not frame then return nil end
+    local id = win:id()
+    if not id then return nil end
+    local screen = screenForRect(frame)
+    local max = screen and screen:frame()
+    if not max then return nil end
+
+    WindowProfile.snapshots[id] = {
+        screen = { x = max.x, y = max.y, w = max.w, h = max.h },
+        frame = { x = frame.x, y = frame.y, w = frame.w, h = frame.h },
+    }
+
+    local existing = WindowProfile.tags[id]
+    local mode
+    if existing and existing.pinned then
+        -- 被手动固定为「自由」的窗口：只刷新相对几何，不改属性类型
+        mode = freeMode(frame, max)
+        mode.pinned = true
+    else
+        mode = detectLayoutModeForFrame(frame, max, win) or freeMode(frame, max)
+    end
+    WindowProfile.tags[id] = mode
+    return mode
+end
+
 -- ============================================
 -- 属性名称（用于提示）
 -- ============================================
@@ -436,7 +526,14 @@ function WindowProfile.describe(mode)
     elseif t == "center" then return "居中"
     elseif t == "third" then return THIRD_NAMES[mode.pos] or "1/3"
     elseif t == "corner" then return CORNER_NAMES[mode.pos] or "1/4"
-    elseif t == "full-height" then return "全高"
+    elseif t == "full-height" then
+        -- 宽度记了分栏宽度时一起显示（跨屏按这个分栏宽度重放）
+        local wm = mode.widthMode
+        if wm then
+            local name = (wm.type == "third") and "1/3" or (RATIO_NAMES[wm.ratio] or "?")
+            return "全高（宽 " .. name .. "）"
+        end
+        return "全高"
     elseif t == "free" then return mode.pinned and "自由（已固定）" or "自由"
     end
     return t
@@ -466,11 +563,18 @@ hs.hotkey.bind(mashShift, "f", function()
     local id = win:id()
     if not id then return end
 
+    local slot = dockSlotOf(win)
+    -- 这是用户显式操作，即使正处在换屏后的记录压制期也要按用户意图记录
+    local savedSuppress, savedPending = WindowProfile.suppressUntil, WindowProfile.pending
+    WindowProfile.suppressUntil, WindowProfile.pending = 0, false
+
     local current = WindowProfile.tags[id]
     if current and current.pinned then
         WindowProfile.tags[id] = nil
-        if dockSlotOf(win) then
-            record(win)   -- 槽位窗口：record 内部按停靠前的 frame 识别
+        if slot then
+            slot.mode = nil   -- 丢掉槽位上的旧属性，下面 record 会按停靠前 frame 重新识别
+            record(win)
+            slot.mode = WindowProfile.tags[id]
         else
             snapshot(win)
             record(win)
@@ -478,12 +582,16 @@ hs.hotkey.bind(mashShift, "f", function()
         Alert.show("布局属性：自动识别（" .. WindowProfile.describe(WindowProfile.tags[id]) .. "）", { timeout = 1.5 })
     else
         local frame, max = meaningfulGeometry(win)
-        if not frame then return end
-        local mode = freeMode(frame, max)
-        mode.pinned = true
-        WindowProfile.tags[id] = mode
-        Alert.show("布局属性：自由（按屏幕比例适配）", { timeout = 1.5 })
+        if frame then
+            local mode = freeMode(frame, max)
+            mode.pinned = true
+            WindowProfile.tags[id] = mode
+            if slot then slot.mode = mode end
+            Alert.show("布局属性：自由（按屏幕比例适配）", { timeout = 1.5 })
+        end
     end
+
+    WindowProfile.suppressUntil, WindowProfile.pending = savedSuppress, savedPending
 end)
 
 -- ============================================
@@ -524,7 +632,8 @@ function WindowProfile.init()
     end)
 
     -- 兜底：每 10 秒全量记录一次，防止漏掉 AX 事件
-    hs.timer.doEvery(10, function()
+    -- 必须保留定时器引用：hs.timer 的重复定时器一旦被 GC 就不再触发（此前这个兜底扫描是死掉的）
+    WindowProfile.recordTimer = hs.timer.doEvery(10, function()
         if not WindowProfile.pending then
             WindowProfile.recordAll()
         end

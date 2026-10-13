@@ -20,6 +20,15 @@ CapsWriterConfig = {
     mouseEnabled = false,  -- 鼠标侧键开关，默认关闭
                            -- true  = 按住侧键录音、松开停止
                            -- false = 不监听侧键，只保留键盘快捷键（⇧→），侧键恢复系统的前进/后退
+
+    -- 客户端自动拉起
+    -- 必须由 Hammerspoon 启动（而非 pm2 / 登录项），否则 macOS 不给麦克风权限，录音会全程静音
+    autoStart     = true,
+    clientPython  = "/Users/yangqian/miniconda3/bin/python",
+    clientScript  = "/Users/yangqian/Downloads/local_asr/CapsWriter-Offline/core_client.py",
+    clientWorkDir = "/Users/yangqian/Downloads/local_asr/CapsWriter-Offline",
+    clientLog     = "logs/client_stdout.log",  -- 相对 clientWorkDir
+    startTimeout  = 45,                        -- 等待客户端就绪的最长秒数
 }
 
 -- ============================================
@@ -777,7 +786,8 @@ function cleanupWindowState()
 end
 
 -- 每 60 秒清理一次历史状态
-hs.timer.doEvery(60, cleanupWindowState)
+-- 必须保留定时器引用：hs.timer 的重复定时器一旦被 GC 就不再触发（此前这个清理是死掉的）
+windowStateCleanupTimer = hs.timer.doEvery(60, cleanupWindowState)
 
 -- 辅助函数：检查值是否在范围内
 function approx(a, b, tolerance)

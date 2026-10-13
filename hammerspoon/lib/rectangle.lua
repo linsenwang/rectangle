@@ -460,6 +460,28 @@ end)
 -- 窗口布局模式检测与应用（跨显示器移动时保持比例）
 -- ============================================
 
+-- 仅全高（贴边等）：高度占满可用高度，记录水平相对位置与宽度
+function fullHeightModeFor(frame, max)
+    return { type = "full-height", relX = (frame.x - max.x) / max.w, relW = frame.w / max.w }
+end
+
+-- 全高窗口的宽度如果正好是某个分栏宽度（1/3、1/2、2/3、5/6），记下来作为 widthMode：
+-- 跨屏时按「分栏宽度」在新屏幕上重算（新屏上仍然正好是三分之一宽），
+-- 而不是按屏幕像素比例缩放（那会把宽度缩成一个和分栏无关的值）
+local WIDTH_FRACTIONS = { 0.5, 2/3, 5/6 }
+
+local function widthModeFor(frame, max, win)
+    local m = getAppMargin(win)
+    local area = getUsableArea(max, win)
+    local usableW = max.w - m.left - m.right - m.inner
+    local thirdW = (area.w - m.inner * 2) / 3
+    if approx(frame.w, thirdW, 30) then return { type = "third" } end
+    for _, ratio in ipairs(WIDTH_FRACTIONS) do
+        if approx(frame.w, usableW * ratio, 50) then return { type = "left-half", ratio = ratio } end
+    end
+    return nil
+end
+
 -- 判断一组几何形状属于哪种布局模式（窗口可能不在屏幕上，比如 Edge Dock 槽位窗口）
 -- @param frame 窗口 frame
 -- @param max 屏幕 frame
@@ -475,18 +497,11 @@ function detectLayoutModeForFrame(frame, max, win)
         return { type = "maximized" }
     end
 
-    -- 2. 居中：水平、垂直都居中，记录相对尺寸
-    -- 必须排在半屏/三分之一之前：中间三分之一本身就是居中的，若先判三分之一，
-    -- 居中窗口会被记成「中 1/3」，交换位置时对方就被摆到三分之一槽位上（看起来就「歪」了）
-    if approx(frame.x + frame.w / 2, area.x + area.w / 2, 20) and
-       approx(frame.y + frame.h / 2, area.y + area.h / 2, 20) then
-        return { type = "center", relW = frame.w / area.w, relH = frame.h / area.h }
-    end
-
-    -- 3. 全高判断
+    -- 2. 全高判断：先算出来，全高窗口垂直方向必然居中，不能拿垂直居中当判据
     local isFullHeight = approx(frame.h, area.h, 10) and approx(frame.y, area.y, 10)
 
-    -- 4. 半屏系列（左/右）
+    -- 3. 全高窗口先看是不是固定分栏（半屏 / 三分之一）：宽度记成「可用区的几分之几」，
+    --    跨屏按同一个分栏宽度重放，比记屏幕像素比例更能适应不同宽度的屏幕
     local usableW = max.w - m.left - m.right - m.inner
     local leftEdge = max.x + m.left
     local rightEdge = max.x + max.w - m.right
@@ -507,13 +522,20 @@ function detectLayoutModeForFrame(frame, max, win)
             if approx(frame.w, usableW * 5/6, 50) then return { type = "right-half", ratio = 5/6 } end
         end
 
-        -- 三分之一屏
+        -- 三分之一屏（中 1/3 本身就在中间，所以这里必须排在「居中」之前，
+        -- 否则中间三分之一会被记成「居中」，跨屏宽度就按可用区比例走而不是正好三分之一）
         local thirdW = (area.w - m.inner * 2) / 3
         if approx(frame.w, thirdW, 30) then
             if approx(frame.x, area.x, 15) then return { type = "third", pos = 1 } end
             if approx(frame.x, area.x + thirdW + m.inner, 15) then return { type = "third", pos = 2 } end
             if approx(frame.x, area.x + (thirdW + m.inner) * 2, 15) then return { type = "third", pos = 3 } end
         end
+    end
+
+    -- 4. 居中：水平、垂直都居中，记录可用区相对尺寸
+    if approx(frame.x + frame.w / 2, area.x + area.w / 2, 20) and
+       approx(frame.y + frame.h / 2, area.y + area.h / 2, 20) then
+        return { type = "center", relW = frame.w / area.w, relH = frame.h / area.h }
     end
 
     -- 5. 四角（1/4）
@@ -539,11 +561,13 @@ function detectLayoutModeForFrame(frame, max, win)
         return { type = "bottom-half" }
     end
 
-    -- 8. 仅全高（贴边等），记录相对位置
+    -- 8. 仅全高（贴边等）：位置按屏幕比例记；宽度能认出是分栏宽度就记成 widthMode
+    --    （例如「全高 + 宽 1/3」：跨屏时宽度重算成新屏幕的三分之一，而不是按比例缩放）
     if isFullHeight then
-        local relX = (frame.x - max.x) / max.w
-        local relW = frame.w / max.w
-        return { type = "full-height", relX = relX, relW = relW }
+        local mode = fullHeightModeFor(frame, max)
+        local wm = widthModeFor(frame, max, win)
+        if wm then mode.widthMode = wm end
+        return mode
     end
 
     return nil
@@ -582,7 +606,8 @@ function layoutFrameFor(mode, max, win)
             area.x + thirdW + m.inner,
             area.x + (thirdW + m.inner) * 2
         }
-        return hs.geometry.rect(xPositions[mode.pos], area.y, thirdW, area.h)
+        -- pos 缺省只取宽度（全高窗口的 widthMode 只需要三分之一的宽度，位置另外记 relX）
+        return hs.geometry.rect(xPositions[mode.pos or 1], area.y, thirdW, area.h)
     elseif mode.type == "corner" then
         local halfW = (area.w - m.inner) / 2
         local halfH = area.h / 2
@@ -598,10 +623,17 @@ function layoutFrameFor(mode, max, win)
     elseif mode.type == "bottom-half" then
         return hs.geometry.rect(area.x, area.y + area.h * 0.5, area.w, area.h * 0.5)
     elseif mode.type == "full-height" then
-        local newX = max.x + max.w * mode.relX
-        local newW = max.w * mode.relW
-        newX = math.max(max.x, math.min(newX, max.x + max.w - newW))
+        -- 宽度优先按记下来的分栏宽度（1/3、1/2、2/3、5/6）在新屏幕上重算，
+        -- 没有分栏信息时才退回屏幕像素比例
+        local newW
+        if mode.widthMode then
+            local wm = layoutFrameFor(mode.widthMode, max, win)
+            if wm and wm.w and wm.w > 0 then newW = wm.w end
+        end
+        newW = newW or max.w * mode.relW
         newW = math.min(newW, max.w)
+        local newX = max.x + max.w * (mode.relX or 0)
+        newX = math.max(max.x, math.min(newX, max.x + max.w - newW))
         return hs.geometry.rect(newX, area.y, newW, area.h)
     elseif mode.type == "center" then
         -- 在可用区域内居中，尺寸按记录的比例缩放
