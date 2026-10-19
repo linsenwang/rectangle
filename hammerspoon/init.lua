@@ -21,7 +21,7 @@ require("auto_dock")       -- 自动停靠（依赖 EdgeDock）
 require("display_layout")  -- 显示器布局记忆
 require("window_profile")  -- 窗口布局属性：屏幕变化后按属性重排
 require("capswriter")      -- CapsWriter 鼠标侧键触发录音（UDP 控制）
-require("notification_watch")  -- 通知监听：通知含「签到」时自动执行签到脚本
+require("notification_watch")  -- 通知监听：签到通知自动执行脚本 / 信息验证码自动复制
 require("keybindings")     -- 快捷键帮助面板 (Ctrl+Option+/)
 require("ocr_shot")        -- 截图 OCR 成 Markdown(LaTeX) (⇧⌘3)
 require("keyboard_lock")   -- 键盘锁：Ctrl+L 启停锁定

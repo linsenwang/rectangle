@@ -1,5 +1,6 @@
 -- ============================================
 -- 通知监听：通知内容命中关键词时自动执行命令（签到）
+--           并自动复制「信息」通知里的验证码
 -- ============================================
 -- 原理：macOS 的通知横幅在「通知中心」(com.apple.notificationcenterui) 进程的
 --       AX 树里是 subrole = AXNotificationCenterBanner 的元素，其 AXDescription
@@ -141,6 +142,103 @@ local function hitKeyword(text)
 end
 
 -- ============================================
+-- 信息验证码自动复制
+-- ============================================
+-- 只处理「信息」应用的通知：识别到验证码后把验证码本身写进剪贴板，
+-- 再用 lib/alert.lua 的统一样式弹一个「✅ 验证码」提示。
+
+local CODE_KEYWORDS = {
+    "验证码", "校验码", "验证代码", "动态码", "动态密码", "确认码", "安全码",
+    "verification code", "passcode", "one-time code", "security code", "otp", "code",
+}
+
+-- 从关键词之后的文本里取验证码：优先连续 4~8 位数字，
+-- 兼容「123 456」「1234 5678」这种分组写法；11 位手机号、年份等会被长度过滤掉
+local function firstCode(tail)
+    local a, b = tail:match("(%d%d%d%d)[ %-](%d%d%d%d)")
+    if a then return a .. b end
+    local c, d = tail:match("(%d%d%d)[ %-](%d%d%d)")
+    if c then return c .. d end
+    local e, f, g = tail:match("(%d%d)[ %-](%d%d)[ %-](%d%d)")
+    if e then return e .. f .. g end
+    for run in tail:gmatch("%d+") do
+        if #run >= 4 and #run <= 8 then return run end
+    end
+    return nil
+end
+
+local function extractCode(text)
+    if type(text) ~= "string" or text == "" then return nil end
+
+    -- Google 常见的「G-123456」形式
+    local google = text:match("[Gg]%s*%-%s*(%d%d%d%d%d%d)")
+    if google then return "G-" .. google end
+
+    local lower = text:lower()
+    for _, kw in ipairs(CODE_KEYWORDS) do
+        local start = 1
+        while true do
+            local _, e = lower:find(kw, start, true)
+            if not e then break end
+            local code = firstCode(text:sub(e + 1, e + 60))
+            if code then return code end
+            start = e + 1
+        end
+    end
+    return nil
+end
+
+-- 通知横幅的 AXDescription 以「应用名, 标题, …」开头
+local function isFromApp(el, names)
+    local desc = attr(el, "AXDescription")
+    if type(desc) ~= "string" or desc == "" then
+        desc = bannerText(el)
+    end
+    for _, name in ipairs(names or {}) do
+        if name ~= "" and desc:sub(1, #name) == name then
+            local after = desc:sub(#name + 1, #name + 1)
+            if after == "" or after == "," or after == "，" or after == " " or after == "-" then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local lastCopiedCode = nil
+local lastCopiedAt = 0
+
+-- 返回 true 表示这条通知已按验证码处理（不再走签到关键词）
+local function handleVerificationCode(el, text)
+    local conf = VerificationCodeConfig or {}
+    if conf.enabled == false then return false end
+    if not isFromApp(el, conf.appNames) then return false end
+
+    local code = extractCode(text)
+    if not code then return false end
+
+    local now = hs.timer.secondsSinceEpoch()
+    if code == lastCopiedCode and now - lastCopiedAt < (conf.dedupeSeconds or 30) then
+        return true
+    end
+    lastCopiedCode, lastCopiedAt = code, now
+
+    local ok, err = pcall(hs.pasteboard.setContents, code)
+    if not ok then
+        log("复制验证码失败：%s", tostring(err))
+        return true
+    end
+
+    log("已复制验证码：%s", code)
+    if _G.Alert and _G.Alert.show then
+        _G.Alert.show("✅ " .. code, { channel = "verification-code", timeout = conf.alertTimeout or 3 })
+    else
+        hs.alert.show("✅ " .. code)
+    end
+    return true
+end
+
+-- ============================================
 -- 已处理通知 id 的持久化
 -- ============================================
 
@@ -276,6 +374,10 @@ local function processBanner(el)
 
     local text = bannerText(el)
     log("新通知：%s", text)
+
+    if handleVerificationCode(el, text) then
+        return
+    end
 
     local kw = hitKeyword(text)
     if kw then
