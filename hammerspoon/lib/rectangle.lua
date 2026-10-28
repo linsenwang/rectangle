@@ -346,7 +346,8 @@ end)
 -- 调整窗口大小
 -- ============================================
 
-local resizeStep = 50
+local resizeStep = ResizeConfig.step
+local minWidth = ResizeConfig.minWidth
 
 -- 智能调整窗口宽度：
 -- - 居中窗口：左右对称伸缩，总步长仍为 resizeStep
@@ -366,7 +367,7 @@ local function resizeWidth(win, delta)
     if delta > 0 then
         newW = math.min(frame.w + delta, area.w)
     else
-        newW = math.max(frame.w + delta, 200)
+        newW = math.max(frame.w + delta, minWidth)
     end
     local actualDelta = newW - frame.w
 
