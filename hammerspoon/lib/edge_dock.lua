@@ -410,6 +410,52 @@ function EdgeDock.refreshBars()
     end
 end
 
+-- 解析槽位对应的应用实例
+-- 微信可能存在同名的第二实例（如 WeChat2，bundleID 不同），hs.application.get("WeChat")
+-- 可能拿到没有窗口的那个实例，导致后续 allWindows() 为空、找不到窗口。
+-- 这里优先返回「拥有目标窗口（winId 或标题匹配）」的那个实例。
+function EdgeDock.resolveApp(appName, winId, winTitle)
+    local bundleID = EdgeDock.bundleMap[appName]
+    local byBundle, byName = nil, nil
+
+    local function hasTargetWindow(app)
+        if winId and winId ~= 0 and winId ~= -1 then
+            local win = hs.window.get(winId)
+            local winApp = win and win:application()
+            if winApp and winApp:pid() == app:pid() then
+                return true
+            end
+        end
+        if winTitle and winTitle ~= "" then
+            local ok, wins = pcall(function() return app:allWindows() end)
+            if ok and wins then
+                for _, w in ipairs(wins) do
+                    if w:title() == winTitle then
+                        return true
+                    end
+                end
+            end
+        end
+        return false
+    end
+
+    for _, app in ipairs(hs.application.runningApplications()) do
+        local okb, bid = pcall(function() return app:bundleID() end)
+        local okn, name = pcall(function() return app:name() end)
+        local isBundle = okb and bundleID and bid == bundleID
+        local isName = okn and name == appName
+        if isBundle or isName then
+            if hasTargetWindow(app) then
+                return app
+            end
+            if isBundle and not byBundle then byBundle = app end
+            if isName and not byName then byName = app end
+        end
+    end
+
+    return byBundle or byName or hs.application.get(appName)
+end
+
 -- 保存 Edge Dock 状态到文件
 function EdgeDock.saveState()
     local prefix = EdgeDock.logPrefix()
@@ -462,7 +508,7 @@ function EdgeDock.saveState()
         
         -- 如果 winId 获取失败，尝试通过应用名和标题重新查找
         if (not win or not win:isStandard()) and slot.appName then
-            local app = hs.application.get(slot.appName)
+            local app = EdgeDock.resolveApp(slot.appName, slot.winId, slot.winTitle)
             if app then
                 local lowerName = string.lower(slot.appName)
                 local isWeChatApp = lowerName == "wechat" or lowerName == "weixin" or lowerName == "微信"
@@ -473,7 +519,8 @@ function EdgeDock.saveState()
                 -- 1. 保存的是主窗口/无标题时，用 helper 避免选到搜索窗口
                 -- 2. 保存的是聊天/小程序窗口时，只按标题精确匹配，不匹配就不更新，避免把槽位“升级”成主窗口
                 if isWeChatApp and isMainTitle then
-                    win = pickWeChatMainWindow(app, nil)
+                    -- 只认主窗口：主窗口不在时不要退回聊天/小程序窗口
+                    win = findWeChatMainWindow()
                 else
                     for _, w in ipairs(app:allWindows()) do
                         if w:isStandard() then
@@ -614,11 +661,22 @@ function EdgeDock.restoreState()
             -- 查找应用
             print(prefix .. " [RESTORE_STATE] 处理槽位 " .. item.slotIndex .. ": app=" .. item.appName .. ", savedWinId=" .. tostring(item.winId) .. ", savedTitle=[" .. tostring(item.winTitle) .. "]")
 
-            local function doRestore(app)
+            local function doRestore(app, attempt)
+                attempt = attempt or 0
+
+                -- 微信主窗口：严格按主标题 + 主实例查找，找不到就跳过，
+                -- 不使用聊天/文章/小程序窗口兜底
+                local lowerName = string.lower(item.appName or "")
+                local isWeChatItem = lowerName == "wechat" or lowerName == "weixin" or lowerName == "微信"
+                local mainWeChatTitles = { ["WeChat"] = true, ["Weixin"] = true, ["微信"] = true }
+                local strictWeChatMain = isWeChatItem
+                    and (not item.winTitle or item.winTitle == "" or mainWeChatTitles[item.winTitle])
+
+                local targetWin = nil
+
                 -- 安全检查：确保 app 是有效的应用对象且有 allWindows 方法
                 if app and type(app.allWindows) == "function" then
                     -- 查找匹配的窗口
-                    local targetWin = nil
                     local windows = app:allWindows()
                     local candidates = {}
 
@@ -633,6 +691,14 @@ function EdgeDock.restoreState()
                         end
                     end
 
+                    if strictWeChatMain then
+                        targetWin = findWeChatMainWindow()
+                        if targetWin then
+                            print(prefix .. " [RESTORE_STATE]   微信主窗口匹配成功: id=" .. tostring(targetWin:id()))
+                        else
+                            print(prefix .. " [RESTORE_STATE]   微信主窗口不存在，跳过该槽位")
+                        end
+                    else
                     -- 匹配策略1: 优先通过 winId 匹配（如果窗口仍然存在）
                     if item.winId then
                         print(prefix .. " [RESTORE_STATE]   尝试winId匹配: " .. tostring(item.winId))
@@ -680,6 +746,7 @@ function EdgeDock.restoreState()
                             -- 不设置 targetWin，跳过此槽位
                         end
                     end
+                    end
 
                     if targetWin then
                         print(prefix .. " [RESTORE_STATE]   槽位 " .. item.slotIndex .. " 恢复成功: " .. item.appName .. ", newWinId=" .. tostring(targetWin:id()))
@@ -719,6 +786,7 @@ function EdgeDock.restoreState()
                         EdgeDock.slots[item.slotIndex] = {
                             win = targetWin,
                             winId = targetWin:id(),
+                            winTitle = item.winTitle or targetWin:title() or "",
                             originalFrame = frame,
                             mode = item.mode,  -- 布局属性：状态文件里有就用它（老状态文件没有则为 nil，之后按 frame 反推一次）
                             currentSize = {w = effW, h = effH},  -- 记录当前尺寸（saveWindowSize=false 时使用）
@@ -747,18 +815,27 @@ function EdgeDock.restoreState()
                     print(prefix .. " [RESTORE_STATE]   槽位 " .. item.slotIndex .. " 恢复失败: 应用未运行 (" .. item.appName .. ")")
                 end
 
+                -- 微信主窗口可能刚启动/刚唤醒，窗口的 AX 标准状态尚未就绪，重试几次
+                if not targetWin and strictWeChatMain and attempt < 3 then
+                    print(prefix .. " [RESTORE_STATE]   微信主窗口暂不可用，1 秒后重试 (" .. (attempt + 1) .. "/3)")
+                    hs.timer.doAfter(1, function()
+                        doRestore(EdgeDock.resolveApp(item.appName, item.winId, item.winTitle), attempt + 1)
+                    end)
+                    return
+                end
+
                 -- 链式处理下一个槽位，避免同步阻塞主线程
                 processItem(idx + 1)
             end
 
-            local app = hs.application.get(item.appName)
+            local app = EdgeDock.resolveApp(item.appName, item.winId, item.winTitle)
             if not app then
                 -- 尝试启动应用
                 print(prefix .. " [RESTORE_STATE]   尝试启动应用: " .. item.appName)
                 hs.application.launchOrFocus(item.appName)
                 -- 异步等待应用启动，不再 usleep 阻塞主线程
                 hs.timer.doAfter(0.5, function()
-                    app = hs.application.get(item.appName)
+                    app = EdgeDock.resolveApp(item.appName, item.winId, item.winTitle)
                     if app then
                         print(prefix .. " [RESTORE_STATE]   应用启动成功: " .. item.appName)
                     else
@@ -889,7 +966,7 @@ function EdgeDock.tryReconnect(slot)
     print(prefix .. " [RECONNECT] 开始: app=" .. slot.appName .. ", savedWinId=" .. tostring(slot.winId) .. ", savedTitle=" .. tostring(slot.winTitle))
     
     -- 方法1: 通过 hs.application.get 查找
-    local app = hs.application.get(slot.appName)
+    local app = EdgeDock.resolveApp(slot.appName, slot.winId, slot.winTitle)
     if not app then
         -- 方法2: 遍历所有运行中的应用（通过 name()）
         for _, a in ipairs(hs.application.runningApplications()) do
@@ -913,7 +990,30 @@ function EdgeDock.tryReconnect(slot)
         print(prefix .. " [RECONNECT] 失败: 找不到应用 " .. slot.appName)
         return nil
     end
-    
+
+    -- 微信主窗口：只认主标题 + 主实例；找不到就返回 nil，
+    -- 不用聊天/文章/小程序窗口兜底（否则会被部分匹配误连到 "WeChat (Window)"）
+    if slot.appName then
+        local lowerName = string.lower(slot.appName)
+        if lowerName == "wechat" or lowerName == "weixin" or lowerName == "微信" then
+            local mainTitles = { ["WeChat"] = true, ["Weixin"] = true, ["微信"] = true }
+            local isMainTitle = not slot.winTitle or slot.winTitle == "" or mainTitles[slot.winTitle]
+            if isMainTitle then
+                local mainWin = findWeChatMainWindow()
+                if mainWin then
+                    local newId = mainWin:id()
+                    slot.win = mainWin
+                    slot.winId = newId
+                    slot.winTitle = mainWin:title() or slot.winTitle
+                    print(prefix .. " [RECONNECT] 微信主窗口: title=[" .. (mainWin:title() or "") .. "], newWinId=" .. tostring(newId))
+                    return mainWin
+                end
+                print(prefix .. " [RECONNECT] 微信主窗口不存在，不退回聊天/小程序窗口")
+                return nil
+            end
+        end
+    end
+
     -- 获取应用的所有窗口
     local windows = app:allWindows()
     print(prefix .. " [RECONNECT] 应用 " .. slot.appName .. " 找到 " .. #windows .. " 个窗口")
@@ -1103,7 +1203,7 @@ function EdgeDock.tryReconnect(slot)
             local mainWeChatTitles = { ["WeChat"] = true, ["Weixin"] = true, ["微信"] = true }
             local isMainTitle = not slot.winTitle or slot.winTitle == "" or mainWeChatTitles[slot.winTitle]
             if isMainTitle then
-                local app = hs.application.get(slot.appName)
+                local app = EdgeDock.resolveApp(slot.appName, slot.winId, slot.winTitle)
                 if app then
                     local mainWin = pickWeChatMainWindow(app, nil)
                     if mainWin then
@@ -1139,7 +1239,7 @@ function EdgeDock.clearSlot(slotIndex)
 
     -- 对于 WeChat 等应用，尝试通过标题再找找
     if not win and slot.appName and slot.winTitle and slot.winTitle ~= "" then
-        local app = hs.application.get(slot.appName)
+        local app = EdgeDock.resolveApp(slot.appName, slot.winId, slot.winTitle)
         if not app then
             local bundleID = EdgeDock.bundleMap[slot.appName]
             if bundleID then
@@ -1764,7 +1864,7 @@ function EdgeDock.start()
             local slot = EdgeDock.slots[i]
             if slot then
                 -- 先检查应用是否还在运行
-                local app = hs.application.get(slot.appName)
+                local app = EdgeDock.resolveApp(slot.appName, slot.winId, slot.winTitle)
                 if not app then
                     -- 应用已关闭，尝试通过 bundle ID 查找
                     local bundleID = EdgeDock.bundleMap[slot.appName]
@@ -1801,7 +1901,7 @@ function EdgeDock.start()
                         elseif not win then
                             -- 检查3: 窗口获取失败但应用还在运行（可能是暂时的）
                             -- 检查应用是否还在运行
-                            local app = hs.application.get(slot.appName)
+                            local app = EdgeDock.resolveApp(slot.appName, slot.winId, slot.winTitle)
                             if app then
                                 -- 应用还在，但窗口获取不到，可能是暂时的
                                 isAbnormalState = true
@@ -1883,6 +1983,10 @@ function EdgeDock.stop()
     if EdgeDock.autoDockWatcher then
         EdgeDock.autoDockWatcher:stop()
         EdgeDock.autoDockWatcher = nil
+    end
+    if EdgeDock.autoDockWindowFilter then
+        EdgeDock.autoDockWindowFilter:unsubscribeAll()
+        EdgeDock.autoDockWindowFilter = nil
     end
 end
 

@@ -516,6 +516,40 @@ function pickWeChatMainWindow(app, candidateWin)
     return candidateWin
 end
 
+-- 严格查找「微信主窗口」：只认标题 WeChat / Weixin / 微信，且必须属于
+-- 主微信实例（com.tencent.xinWeChat，排除同名的 WeChat2 双开实例）。
+-- 与 pickWeChatMainWindow 不同，这里绝不回退到聊天/文章/小程序窗口，
+-- 供自动停靠、槽位恢复/重连等「只应操作主窗口」的场景使用。
+function findWeChatMainWindow()
+    local bundleID = "com.tencent.xinWeChat"
+    local mainTitles = { ["WeChat"] = true, ["Weixin"] = true, ["微信"] = true }
+
+    local best = nil
+    local bestArea = -1
+
+    for _, win in ipairs(hs.window.allWindows()) do
+        local okApp, app = pcall(function() return win:application() end)
+        if okApp and app then
+            local okBundle, winBundle = pcall(function() return app:bundleID() end)
+            local okStd, standard = pcall(function() return win:isStandard() end)
+            local title = win:title() or ""
+            if okBundle and winBundle == bundleID and okStd and standard and mainTitles[title] then
+                local area = 0
+                pcall(function()
+                    local f = win:frame()
+                    area = (f and f.w * f.h) or 0
+                end)
+                if area > bestArea then
+                    bestArea = area
+                    best = win
+                end
+            end
+        end
+    end
+
+    return best
+end
+
 -- ============================================
 -- 修复：hs.window.focusedWindow() 在切换到 Chrome App/PWA 后返回旧窗口的问题
 -- ============================================
