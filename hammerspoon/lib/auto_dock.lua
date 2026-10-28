@@ -140,8 +140,20 @@ local function reopenWeChatMainWindow()
     hs.execute("open -b " .. WECHAT_BUNDLE_ID)
 end
 
+-- 鼠标是否还停在目标槽位上（用于重开后直接滑出窗口）
+local function isMouseOverSlot(slotIndex)
+    local screen = EdgeDock.getCurrentScreen()
+    local sx, sy, sw, sh = EdgeDock.getSlotPosition(slotIndex, screen)
+    local m = hs.mouse.absolutePosition()
+    local r = EdgeDock.config.triggerRange
+    return m.x >= sx - (r.leftExtend or 0)
+       and m.y >= sy - (r.topExtend or 0)
+       and m.y <= sy + sh + (r.bottomExtend or 0)
+end
+
 -- 没有主窗口时：先重新打开，再轮询等待主窗口出现后自动贴边
-local function startDockWhenWeChatMainAppears(targetSlot)
+-- showWhenReady=true 时，若鼠标仍停在槽位上，贴边后直接滑出窗口
+local function startDockWhenWeChatMainAppears(targetSlot, showWhenReady)
     stopWeChatReopenWait()
 
     local waited = 0
@@ -154,7 +166,10 @@ local function startDockWhenWeChatMainAppears(targetSlot)
             -- 等窗口完成创建/布局再停靠，避免记录到错误的原始位置
             hs.timer.doAfter(0.5, function()
                 local mainWin = findWeChatMainWindow() or win
-                dockWeChatMainWindow(mainWin, targetSlot)
+                local docked = dockWeChatMainWindow(mainWin, targetSlot)
+                if docked and showWhenReady and isMouseOverSlot(targetSlot) then
+                    EdgeDock.peekWindow(targetSlot)
+                end
             end)
         elseif waited >= WECHAT_REOPEN_TIMEOUT then
             stopWeChatReopenWait()
@@ -191,6 +206,52 @@ local function autoDockWeChat(dockExisting)
 
     reopenWeChatMainWindow()
     startDockWhenWeChatMainAppears(targetSlot)
+end
+
+-- 供 Edge Dock 调用：鼠标停在槽位上时发现窗口已经关闭，
+-- 立即重开主窗口并贴边，而不是等 5 秒一次的校验定时器
+function EdgeDock.recoverSlotWindow(slotIndex)
+    local slot = EdgeDock.slots[slotIndex]
+    if not slot or not isWeChatName(slot.appName) then
+        return false
+    end
+
+    -- 只处理主微信实例的槽位（手动停靠 WeChat2 的窗口不在这里重开）
+    if slot.win then
+        local ok, bundleID = pcall(function()
+            local app = slot.win:application()
+            return app and app:bundleID()
+        end)
+        if ok and bundleID and bundleID ~= WECHAT_BUNDLE_ID then
+            return false
+        end
+    end
+
+    -- 已经在等待重开了
+    if wechatReopenTimer then
+        return true
+    end
+
+    local mainWin = findWeChatMainWindow()
+    if mainWin then
+        -- 主窗口其实还在（可能刚被系统恢复），直接重新贴边
+        if slot.hideTimer then slot.hideTimer:stop() end
+        EdgeDock.slots[slotIndex] = nil
+        dockWeChatMainWindow(mainWin, slotIndex)
+        return true
+    end
+
+    print("[AutoDock] 槽位 " .. slotIndex .. " 的微信窗口已关闭，立即重新打开主窗口")
+
+    -- 旧槽位指向的窗口已经不存在，先清掉记录，避免把死窗口当成占用
+    if slot.hideTimer then slot.hideTimer:stop() end
+    EdgeDock.slots[slotIndex] = nil
+    EdgeDock.refreshBars()
+    EdgeDock.saveState()
+
+    reopenWeChatMainWindow()
+    startDockWhenWeChatMainAppears(slotIndex, true)
+    return true
 end
 
 -- 应用启动监听器（自动停靠）

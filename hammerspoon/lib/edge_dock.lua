@@ -1303,17 +1303,32 @@ function EdgeDock.peekWindow(slotIndex)
         return
     end
     
-    -- 快速获取窗口对象（不做耗时的验证）
-    local win = slot.win
-    if not win and slot.winId then
-        win = hs.window.get(slot.winId)
-    end
-    
+    -- 按 winId 取真实窗口：窗口被关闭后 slot.win 仍然握着旧对象，
+    -- 不能直接拿来用，否则会误以为窗口还在、一直“显示”一个已关闭的窗口
+    local win = slot.winId and hs.window.get(slot.winId) or nil
+
     if not win then
-        -- 窗口暂时不可用，不处理
+        -- 窗口已经不在了（可能被误关）：立即交给自动停靠重开主窗口
+        if EdgeDock.recoverSlotWindow and EdgeDock.recoverSlotWindow(slotIndex) then
+            return
+        end
+        -- 没有恢复逻辑：清掉失效槽位，避免小条一直显示为占用
+        if slot.hideTimer then
+            slot.hideTimer:stop()
+            slot.hideTimer = nil
+        end
+        EdgeDock.slots[slotIndex] = nil
+        EdgeDock.refreshBars()
+        EdgeDock.saveState()
         return
     end
-    
+
+    -- 非标准窗口可能是休眠/唤醒的临时状态，交给验证定时器处理
+    local okStd, standard = pcall(function() return win:isStandard() end)
+    if not okStd or not standard then
+        return
+    end
+
     -- 更新引用
     slot.win = win
     
@@ -1530,6 +1545,18 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
         -- 检测是否在槽位区域 - 显示窗口
         if inSlotArea and not slot.isShowing then
             EdgeDock.peekWindow(i)
+        end
+
+        -- 窗口显示期间被关闭：鼠标停在 bar 上也要立即发现并重开，
+        -- 不必等 5 秒一次的校验定时器（这里约 200ms 检查一次）
+        if slot.isShowing and checkFrame then
+            local liveWin = slot.winId and hs.window.get(slot.winId)
+            if not liveWin then
+                slot.isShowing = false
+                if EdgeDock.recoverSlotWindow then
+                    EdgeDock.recoverSlotWindow(i)
+                end
+            end
         end
 
         -- 检测是否离开窗口区域 - 启动隐藏计时器
