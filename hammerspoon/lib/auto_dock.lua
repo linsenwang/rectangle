@@ -153,7 +153,8 @@ end
 
 -- 没有主窗口时：先重新打开，再轮询等待主窗口出现后自动贴边
 -- showWhenReady=true 时，若鼠标仍停在槽位上，贴边后直接滑出窗口
-local function startDockWhenWeChatMainAppears(targetSlot, showWhenReady)
+-- preserved 用于窗口重开后沿用原来的 originalFrame / 布局属性，避免恢复位置丢失
+local function startDockWhenWeChatMainAppears(targetSlot, showWhenReady, preserved)
     stopWeChatReopenWait()
 
     local waited = 0
@@ -167,8 +168,20 @@ local function startDockWhenWeChatMainAppears(targetSlot, showWhenReady)
             hs.timer.doAfter(0.5, function()
                 local mainWin = findWeChatMainWindow() or win
                 local docked = dockWeChatMainWindow(mainWin, targetSlot)
-                if docked and showWhenReady and isMouseOverSlot(targetSlot) then
-                    EdgeDock.peekWindow(targetSlot)
+                if docked then
+                    local newSlot = EdgeDock.slots[targetSlot]
+                    if preserved and newSlot then
+                        if preserved.originalFrame then
+                            newSlot.originalFrame = preserved.originalFrame
+                        end
+                        if preserved.mode then
+                            newSlot.mode = preserved.mode
+                        end
+                        EdgeDock.saveState()
+                    end
+                    if showWhenReady and isMouseOverSlot(targetSlot) then
+                        EdgeDock.peekWindow(targetSlot)
+                    end
                 end
             end)
         elseif waited >= WECHAT_REOPEN_TIMEOUT then
@@ -216,6 +229,11 @@ function EdgeDock.recoverSlotWindow(slotIndex)
         return false
     end
 
+    -- 只处理主窗口的槽位：手动停靠的文章/聊天/小程序窗口不在这里重开
+    if slot.winTitle and slot.winTitle ~= "" and not WECHAT_MAIN_TITLES[slot.winTitle] then
+        return false
+    end
+
     -- 只处理主微信实例的槽位（手动停靠 WeChat2 的窗口不在这里重开）
     if slot.win then
         local ok, bundleID = pcall(function()
@@ -223,6 +241,11 @@ function EdgeDock.recoverSlotWindow(slotIndex)
             return app and app:bundleID()
         end)
         if ok and bundleID and bundleID ~= WECHAT_BUNDLE_ID then
+            return false
+        end
+
+        local okTitle, title = pcall(function() return slot.win:title() end)
+        if okTitle and title and title ~= "" and not WECHAT_MAIN_TITLES[title] then
             return false
         end
     end
@@ -234,14 +257,24 @@ function EdgeDock.recoverSlotWindow(slotIndex)
 
     local mainWin = findWeChatMainWindow()
     if mainWin then
-        -- 主窗口其实还在（可能刚被系统恢复），直接重新贴边
+        -- 主窗口其实还在（可能刚被系统恢复）：沿用原槽位的 originalFrame，
+        -- 只更新窗口引用后重新隐藏，避免重新停靠时把隐藏坐标记成恢复位置。
         if slot.hideTimer then slot.hideTimer:stop() end
-        EdgeDock.slots[slotIndex] = nil
-        dockWeChatMainWindow(mainWin, slotIndex)
+        slot.win = mainWin
+        slot.winId = mainWin:id()
+        slot.winTitle = mainWin:title() or slot.winTitle
+        EdgeDock.hideWindow(slotIndex)
+        EdgeDock.refreshBars()
+        EdgeDock.saveState()
+        print("[AutoDock] 槽位 " .. slotIndex .. " 的微信主窗口已恢复，重新贴边")
         return true
     end
 
     print("[AutoDock] 槽位 " .. slotIndex .. " 的微信窗口已关闭，立即重新打开主窗口")
+
+    -- 保存原槽位的恢复目标：重开后的窗口位置可能已经变了，
+    -- 不能把临时位置当成 originalFrame。
+    local preserved = { originalFrame = slot.originalFrame, mode = slot.mode }
 
     -- 旧槽位指向的窗口已经不存在，先清掉记录，避免把死窗口当成占用
     if slot.hideTimer then slot.hideTimer:stop() end
@@ -250,7 +283,7 @@ function EdgeDock.recoverSlotWindow(slotIndex)
     EdgeDock.saveState()
 
     reopenWeChatMainWindow()
-    startDockWhenWeChatMainAppears(slotIndex, true)
+    startDockWhenWeChatMainAppears(slotIndex, true, preserved)
     return true
 end
 

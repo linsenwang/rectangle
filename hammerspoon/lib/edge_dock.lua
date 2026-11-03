@@ -1776,16 +1776,40 @@ EdgeDock.screenWatcher = hs.screen.watcher.new(function()
     end)
 end)
 
+-- 唤醒后窗口恢复需要时间。这段时间内的验证失败只重试，不累计清理计数：
+-- 微信主窗口在唤醒瞬间经常暂时取不到，之前会连续两次唤醒后被当成已关闭清槽。
+local WAKE_GRACE_SECONDS = 30
+
+-- 自动停靠的应用（如微信）：槽位恢复应交给 EdgeDock.recoverSlotWindow，
+-- 不能用“验证失败两次就清槽”的逻辑，否则窗口只是短暂不可访问也会被清掉。
+local function isAutoDockSlot(slot)
+    return slot ~= nil and AutoDockConfig ~= nil and AutoDockConfig[slot.appName] ~= nil
+end
+
+-- 唤醒后窗口可能被系统/布局恢复逻辑挪回可见区域，需要重新藏到槽位隐藏点
+local function isWindowHiddenInSlot(slot, win)
+    if not win then return false end
+    local ok, frame = pcall(function() return win:frame() end)
+    if not ok or not frame then return false end
+    local screen = EdgeDock.getSlotScreenFrame(slot)
+    local hideX = screen.x + screen.w - 1
+    local hideY = screen.y + screen.h - 1
+    return math.abs(frame.x - hideX) <= 5 and math.abs(frame.y - hideY) <= 5
+end
+
 -- 系统休眠/唤醒/锁屏监听（事件驱动，避免轮询）
 EdgeDock.caffeinateWatcher = hs.caffeinate.watcher.new(function(eventType)
     local prefix = EdgeDock.logPrefix()
     if eventType == hs.caffeinate.watcher.systemDidWake then
         EdgeDock.isSystemSleeping = false
+        EdgeDock.wakeGraceUntil = hs.timer.secondsSinceEpoch() + WAKE_GRACE_SECONDS
         print(prefix .. " [CAFFEINATE] ====== 系统唤醒 ======")
         print(prefix .. " [CAFFEINATE] 当前槽位状态:")
         for i = 1, EdgeDock.config.maxSlots do
             local slot = EdgeDock.slots[i]
             if slot then
+                -- 新一次唤醒重新计数：旧失败次数可能来自上次唤醒的瞬时不可访问
+                slot.failCount = 0
                 print(prefix .. " [CAFFEINATE]   槽位 " .. i .. ": app=" .. slot.appName .. ", winId=" .. tostring(slot.winId) .. ", isShowing=" .. tostring(slot.isShowing))
             else
                 print(prefix .. " [CAFFEINATE]   槽位 " .. i .. ": 空")
@@ -1819,14 +1843,30 @@ EdgeDock.caffeinateWatcher = hs.caffeinate.watcher.new(function(eventType)
                         if slot.isShowing then
                             print(prefix .. " [CAFFEINATE] 槽位 " .. i .. " 之前在显示状态，重新隐藏")
                             EdgeDock.hideWindow(i)
+                        elseif isAutoDockSlot(slot) and EdgeDock.recoverSlotWindow then
+                            local win = validSlot.win
+                            local okStd, standard = pcall(function() return win:isStandard() end)
+                            if okStd and standard and not isWindowHiddenInSlot(slot, win) then
+                                print(prefix .. " [CAFFEINATE] 槽位 " .. i .. " 的窗口不在隐藏位置，重新贴边")
+                                EdgeDock.recoverSlotWindow(i)
+                            end
                         end
                     else
-                        slot.failCount = (slot.failCount or 0) + 1
-                        print(prefix .. " [CAFFEINATE] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 无法重新连接，失败次数=" .. slot.failCount)
                         table.insert(failedSlots, i .. "(" .. (slot.appName or "?") .. ")")
-                        if slot.failCount >= 2 then
-                            print(prefix .. " [CAFFEINATE] 槽位 " .. i .. " 连续2次唤醒验证失败，清理槽位")
-                            EdgeDock.clearSlot(i)
+                        -- 自动停靠的槽位（微信）：窗口只是暂时取不到时不能清槽，
+                        -- 交给恢复逻辑重新找窗口 / 重开主窗口并贴回原槽位。
+                        local recovered = isAutoDockSlot(slot)
+                            and EdgeDock.recoverSlotWindow
+                            and EdgeDock.recoverSlotWindow(i)
+                        if recovered then
+                            print(prefix .. " [CAFFEINATE] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 验证失败，已交给恢复逻辑")
+                        else
+                            slot.failCount = (slot.failCount or 0) + 1
+                            print(prefix .. " [CAFFEINATE] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 无法重新连接，失败次数=" .. slot.failCount)
+                            if slot.failCount >= 2 then
+                                print(prefix .. " [CAFFEINATE] 槽位 " .. i .. " 连续2次唤醒验证失败，清理槽位")
+                                EdgeDock.clearSlot(i)
+                            end
                         end
                     end
                 else
@@ -1944,6 +1984,8 @@ function EdgeDock.start()
     EdgeDock.validationTimer = hs.timer.doEvery(5, function()
         local prefix = EdgeDock.logPrefix()
         local changed = false
+        local now = hs.timer.secondsSinceEpoch()
+        local inWakeGrace = EdgeDock.wakeGraceUntil and now < EdgeDock.wakeGraceUntil
 
         -- 锁屏或休眠期间跳过验证（由 watcher 事件维护标志位）
         if EdgeDock.isSystemSleeping or EdgeDock.isScreenLocked then
@@ -2029,15 +2071,23 @@ function EdgeDock.start()
                     end
                     
                     if not isAbnormalState then
-                        -- 真正的验证失败，增加失败计数
-                        slot.failCount = (slot.failCount or 0) + 1
-                        print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 验证失败，失败次数=" .. slot.failCount)
-                        
-                        -- 连续 3 次失败才清理（给窗口恢复留出时间）
-                        if slot.failCount >= 3 then
-                            print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 连续3次验证失败，清理槽位")
-                            EdgeDock.clearSlot(i)
-                            changed = true
+                        if inWakeGrace then
+                            -- 唤醒后窗口还没完全恢复：只等待，不累计失败次数
+                            print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 唤醒恢复宽限期内，跳过失败计数")
+                        elseif isAutoDockSlot(slot) then
+                            -- 自动停靠槽位（微信）保留记录，窗口关闭时由悬停/唤醒恢复逻辑重开
+                            print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 自动停靠槽位，保留等待恢复")
+                        else
+                            -- 真正的验证失败，增加失败计数
+                            slot.failCount = (slot.failCount or 0) + 1
+                            print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 验证失败，失败次数=" .. slot.failCount)
+
+                            -- 连续 3 次失败才清理（给窗口恢复留出时间）
+                            if slot.failCount >= 3 then
+                                print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 连续3次验证失败，清理槽位")
+                                EdgeDock.clearSlot(i)
+                                changed = true
+                            end
                         end
                     end
                 else
