@@ -18,6 +18,7 @@ require("edge_dock")       -- Edge Dock（必须在 tiling 之前加载）
 require("tiling")          -- 窗口平铺（依赖 EdgeDock）
 require("stitch_fullscreen") -- 拼接全屏：按比例铺满屏幕（依赖 TileManager）
 require("auto_dock")       -- 自动停靠（依赖 EdgeDock）
+require("auto_close")      -- 应用窗口闲置自动关闭（不退出应用）
 require("display_layout")  -- 显示器布局记忆
 require("window_profile")  -- 窗口布局属性：屏幕变化后按属性重排
 require("capswriter")      -- CapsWriter 鼠标侧键触发录音（UDP 控制）
