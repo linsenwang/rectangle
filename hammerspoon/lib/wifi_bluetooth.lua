@@ -1,6 +1,7 @@
 -- ============================================
 -- 连接指定 Wi-Fi 时自动打开蓝牙
 -- 依赖 blueutil（brew install blueutil）
+-- macOS 14+ 读取 SSID 需授予 Hammerspoon 定位权限
 -- ============================================
 
 WifiBluetooth = WifiBluetooth or {}
@@ -91,9 +92,29 @@ local function currentSSID()
     return hs.wifi.currentNetwork()
 end
 
+local function wifiPowered()
+    local details = hs.wifi.interfaceDetails()
+    return details and details.power == true
+end
+
+local ssidPermissionWarned = false
+
+-- macOS 14+ 读取 SSID 需要定位权限；缺权限时 currentNetwork() 恒为 nil
+local function checkSSIDAccess()
+    if ssidPermissionWarned or not wifiPowered() then return end
+    if currentSSID() ~= nil then return end
+    ssidPermissionWarned = true
+    log("ERROR: 读取不到当前 Wi-Fi 名称，Hammerspoon 缺少定位权限；请在 系统设置 > 隐私与安全性 > 定位服务 中允许 Hammerspoon")
+end
+
 -- 延迟执行前再次确认仍连着目标 Wi-Fi，避免刚连上又切走时误开
+-- 必须保留 timer 引用，否则配置重载时的 GC 会把它回收，回调不会执行
+local pendingTimer
+
 local function checkAndEnable(ssid)
-    hs.timer.doAfter(config.delay, function()
+    if pendingTimer then pendingTimer:stop() end
+    pendingTimer = hs.timer.doAfter(config.delay, function()
+        pendingTimer = nil
         local now = currentSSID()
         if ssidMatches(now) then
             enableBluetooth(now)
@@ -104,6 +125,7 @@ local function checkAndEnable(ssid)
 end
 
 local lastSSID = currentSSID()
+log("启动时读取到 Wi-Fi：" .. tostring(lastSSID))
 
 local function handleWifiChange()
     local ssid = currentSSID()
@@ -131,5 +153,7 @@ WifiBluetooth.watcher:start()
 if config.checkOnLoad and ssidMatches(lastSSID) then
     checkAndEnable(lastSSID)
 end
+
+checkSSIDAccess()
 
 log("已启动：连接 " .. table.concat(config.ssidPatterns, " / ") .. " 时自动打开蓝牙")
