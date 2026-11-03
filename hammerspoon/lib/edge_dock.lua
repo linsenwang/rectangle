@@ -7,7 +7,8 @@ EdgeDock = {
     slots = {},             -- 槽位 {win, originalFrame, appName, isShowing, hideTimer}
     bars = {},              -- 小条 UI 元素
     mask = nil,             -- 右侧遮罩条（遮挡可能露出的窗口边缘）
-    currentBarScreen = nil,  -- 当前小条所在的屏幕（用于多显示器检测）
+    currentBarScreenId = nil, -- 当前小条所在的屏幕 id（用于多显示器检测）
+    screenCache = nil,       -- 屏幕 frame 缓存（鼠标回调里按坐标查屏用）
     config = EdgeDockConfig, -- 引用全局配置
 
     -- 应用名到 bundle ID 的映射，避免多处重复定义
@@ -131,13 +132,77 @@ function EdgeDock.brightenColor(color, factor)
     }
 end
 
+-- 获取鼠标所在的屏幕对象
+function EdgeDock.getCurrentScreenObject()
+    return hs.mouse.getCurrentScreen() or hs.screen.mainScreen()
+end
+
 -- 获取鼠标所在的屏幕
 function EdgeDock.getCurrentScreen()
-    local screen = hs.mouse.getCurrentScreen()
-    if not screen then
-        screen = hs.screen.mainScreen()
+    return EdgeDock.getCurrentScreenObject():frame()
+end
+
+-- 屏幕 frame 缓存：mouseMoved 是高频回调，里面不能调 hs.mouse.getCurrentScreen()/screen:frame()
+-- （两者合计约 57 µs/事件，内部是 WindowServer 往返）
+function EdgeDock.refreshScreenCache()
+    local list = {}
+    for _, s in ipairs(hs.screen.allScreens()) do
+        local f = s:frame()
+        if f then
+            list[#list + 1] = { id = s:id(), frame = f }
+        end
     end
-    return screen:frame()
+    EdgeDock.screenCache = list
+end
+
+-- 按坐标取屏幕（纯内存计算）：返回 frame, 屏幕 id
+-- 坐标落在两块屏幕之间的空隙时取最近的一块
+function EdgeDock.screenAtPoint(x, y)
+    local list = EdgeDock.screenCache
+    if not list or #list == 0 then
+        EdgeDock.refreshScreenCache()
+        list = EdgeDock.screenCache or {}
+    end
+
+    for i = 1, #list do
+        local f = list[i].frame
+        if x >= f.x and x < f.x + f.w and y >= f.y and y < f.y + f.h then
+            return f, list[i].id
+        end
+    end
+
+    local best, bestId, bestDist = nil, nil, math.huge
+    for i = 1, #list do
+        local f = list[i].frame
+        local dx = math.max(f.x - x, 0, x - (f.x + f.w))
+        local dy = math.max(f.y - y, 0, y - (f.y + f.h))
+        local d = dx * dx + dy * dy
+        if d < bestDist then
+            bestDist, best, bestId = d, f, list[i].id
+        end
+    end
+    return best, bestId
+end
+
+-- 槽位窗口是否还活着：只用已缓存的窗口对象判断，不能调 hs.window.get(id)
+-- （那是一次全量 AX 枚举，实测 30-40 ms；这里约 60 µs）
+-- 已关闭的窗口对象 isStandard() 为 false 且 frame 尺寸为 0；
+-- 休眠后暂时变成非标准的窗口 frame 尺寸仍正常，不能当成已关闭
+function EdgeDock.isSlotWindowAlive(slot)
+    local win = slot and slot.win
+    if not win then return false end
+
+    local ok, alive = pcall(function()
+        if slot.winId and win:id() ~= slot.winId then
+            return false
+        end
+        if win:isStandard() then
+            return true
+        end
+        local f = win:frame()
+        return f ~= nil and f.w > 0 and f.h > 0
+    end)
+    return ok and alive
 end
 
 -- 根据 screenId 查找屏幕对象
@@ -255,7 +320,12 @@ end
 function EdgeDock.validateSlot(slotIndex)
     local slot = EdgeDock.slots[slotIndex]
     if not slot then return nil end
-    
+
+    -- 快速路径：缓存的窗口对象还有效就不做 hs.window.get(id)（30-40 ms 全量 AX 枚举）
+    if EdgeDock.isSlotWindowAlive(slot) then
+        return slot
+    end
+
     local prefix = EdgeDock.logPrefix()
     local oldWinId = slot.winId
     local appName = slot.appName or "unknown"
@@ -335,8 +405,8 @@ function EdgeDock.initBars()
     
     -- 获取当前屏幕
     local screen = EdgeDock.getCurrentScreen()
-    -- 记录小条所在的屏幕
-    EdgeDock.currentBarScreen = screen.x .. "," .. screen.y .. "," .. screen.w .. "," .. screen.h
+    -- 记录小条所在的屏幕（数字 id，避免每个鼠标事件都拼字符串）
+    EdgeDock.currentBarScreenId = EdgeDock.getCurrentScreenObject():id()
     
     -- 创建 bars（初始为空槽位样式）
     for i = 1, EdgeDock.config.maxSlots do
@@ -1303,9 +1373,14 @@ function EdgeDock.peekWindow(slotIndex)
         return
     end
     
-    -- 按 winId 取真实窗口：窗口被关闭后 slot.win 仍然握着旧对象，
-    -- 不能直接拿来用，否则会误以为窗口还在、一直“显示”一个已关闭的窗口
-    local win = slot.winId and hs.window.get(slot.winId) or nil
+    -- 优先用缓存窗口对象（判活约 60 µs）；对象已失效时才做 hs.window.get(30-40 ms) 找回
+    -- 直接用 slot.win 是不行的：窗口被关闭后对象还在，会被误当成窗口仍然存在
+    local win
+    if EdgeDock.isSlotWindowAlive(slot) then
+        win = slot.win
+    else
+        win = slot.winId and hs.window.get(slot.winId) or nil
+    end
 
     if not win then
         -- 窗口已经不在了（可能被误关）：立即交给自动停靠重开主窗口
@@ -1495,49 +1570,54 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
     end
 
     local mousePos = e:location()
-    -- 使用当前鼠标所在的屏幕（支持多显示器）
-    local screen = EdgeDock.getCurrentScreen()
     local r = EdgeDock.config.triggerRange
     local maxSlots = EdgeDock.config.maxSlots
 
+    -- 屏幕按坐标从缓存查（不调 hs.mouse.getCurrentScreen/screen:frame，两者合计约 57 µs）
+    local screen, screenId = EdgeDock.screenAtPoint(mousePos.x, mousePos.y)
+    if not screen then
+        EdgeDock.refreshScreenCache()
+        screen, screenId = EdgeDock.screenAtPoint(mousePos.x, mousePos.y)
+    end
+    if not screen then return false end
+
     -- 检测屏幕变化，如果鼠标移动到了不同屏幕，重新定位小条
-    local screenId = screen.x .. "," .. screen.y .. "," .. screen.w .. "," .. screen.h
-    if EdgeDock.currentBarScreen then
-        if EdgeDock.currentBarScreen ~= screenId then
-            -- 屏幕变化，重新定位小条和遮罩
-            EdgeDock.currentBarScreen = screenId
-            EdgeDock.refreshBars()
-            EdgeDock.refreshMask()
-            -- 如果有正在显示的窗口，先隐藏它（避免窗口留在旧屏幕）
-            -- 但处于居中暂停状态的窗口保持显示
-            for i = 1, maxSlots do
-                local slot = EdgeDock.slots[i]
-                if slot and slot.isShowing and not slot.centeredPaused then
-                    EdgeDock.hideWindow(i)
-                end
+    if EdgeDock.currentBarScreenId == nil then
+        EdgeDock.currentBarScreenId = screenId
+    elseif EdgeDock.currentBarScreenId ~= screenId then
+        EdgeDock.currentBarScreenId = screenId
+        -- 排列/分辨率可能刚变过：先重建缓存，再用新几何
+        EdgeDock.refreshScreenCache()
+        local newScreen, newScreenId = EdgeDock.screenAtPoint(mousePos.x, mousePos.y)
+        if newScreen then
+            screen, screenId = newScreen, newScreenId
+            EdgeDock.currentBarScreenId = newScreenId
+        end
+        EdgeDock.refreshBars()
+        EdgeDock.refreshMask()
+        -- 如果有正在显示的窗口，先隐藏它（避免窗口留在旧屏幕）
+        -- 但处于居中暂停状态的窗口保持显示
+        for i = 1, maxSlots do
+            local slot = EdgeDock.slots[i]
+            if slot and slot.isShowing and not slot.centeredPaused then
+                EdgeDock.hideWindow(i)
             end
         end
-    else
-        -- 初始化当前屏幕
-        EdgeDock.currentBarScreen = screenId
     end
 
-    -- 每个事件只计算一次槽位几何（原先每个槽位每次事件重复计算 getSlotPosition/getBarHeight）
+    -- 每个事件只算一次槽位几何（原先是每个槽位每次事件重复计算 getSlotPosition/getBarHeight）
     local barHeight = EdgeDock.getBarHeight(screen)
     local startY = screen.y + EdgeDock.config.topMargin
     local slotX = screen.x + screen.w - EdgeDock.config.barWidth - (EdgeDock.config.barRightOffset or 5)
-    local slotY = {}
-    for i = 1, maxSlots do
-        slotY[i] = startY + (i - 1) * (barHeight + EdgeDock.config.barGap)
-    end
     local rightEdge = screen.x + screen.w
+    local slotStep = barHeight + EdgeDock.config.barGap
 
     -- 悬停检测
     for i = 1, maxSlots do
         local slot = EdgeDock.slots[i]
         if not slot then goto continue end
 
-        local sy = slotY[i]
+        local sy = startY + (i - 1) * slotStep
         -- 扩大检测区域：屏幕右边缘附近都能触发
         local inSlotArea = mousePos.x >= slotX - r.leftExtend and mousePos.x <= rightEdge + r.rightExtend
                           and mousePos.y >= sy - r.topExtend and mousePos.y <= sy + barHeight + r.bottomExtend
@@ -1549,13 +1629,11 @@ EdgeDock.mouseWatcher = hs.eventtap.new({hs.eventtap.event.types.mouseMoved}, fu
 
         -- 窗口显示期间被关闭：鼠标停在 bar 上也要立即发现并重开，
         -- 不必等 5 秒一次的校验定时器（这里约 200ms 检查一次）
-        if slot.isShowing and checkFrame then
-            local liveWin = slot.winId and hs.window.get(slot.winId)
-            if not liveWin then
-                slot.isShowing = false
-                if EdgeDock.recoverSlotWindow then
-                    EdgeDock.recoverSlotWindow(i)
-                end
+        -- 判活只用缓存对象（约 60 µs），不能调 hs.window.get(id)（30-40 ms）
+        if slot.isShowing and checkFrame and not EdgeDock.isSlotWindowAlive(slot) then
+            slot.isShowing = false
+            if EdgeDock.recoverSlotWindow then
+                EdgeDock.recoverSlotWindow(i)
             end
         end
 
@@ -1691,6 +1769,8 @@ end)
 -- 屏幕变化时重新定位
 EdgeDock.screenWatcher = hs.screen.watcher.new(function()
     hs.timer.doAfter(0.3, function()
+        EdgeDock.refreshScreenCache()
+        EdgeDock.currentBarScreenId = EdgeDock.getCurrentScreenObject():id()
         EdgeDock.refreshBars()
         EdgeDock.refreshMask()
     end)
@@ -1753,6 +1833,8 @@ EdgeDock.caffeinateWatcher = hs.caffeinate.watcher.new(function(eventType)
                     print(prefix .. " [CAFFEINATE] 槽位 " .. i .. " 为空，跳过")
                 end
             end
+            EdgeDock.refreshScreenCache()
+            EdgeDock.currentBarScreenId = EdgeDock.getCurrentScreenObject():id()
             EdgeDock.refreshBars()
             EdgeDock.refreshMask()
             EdgeDock.saveState()
@@ -1842,7 +1924,10 @@ end
 function EdgeDock.start()
     -- 先恢复可能被之前实例藏起来的窗口（这些不在状态文件中）
     EdgeDock.recoverHiddenWindows()
-    
+
+    -- 屏幕缓存要在监听器之前建好，鼠标回调里只做内存查表
+    EdgeDock.refreshScreenCache()
+
     -- 启动监听器（在恢复状态前启动，以便恢复后的窗口能被正确处理）
     EdgeDock.mouseWatcher:start()
     EdgeDock.appWatcher:start()
@@ -1867,18 +1952,22 @@ function EdgeDock.start()
         end
         
         -- 额外检查：如果所有窗口都是非标准且 id=0，可能是系统正在恢复中
+        -- 判活走缓存对象（hs.window.get 每次 30-40 ms）
         local allAbnormal = true
         local hasAnyWindow = false
         for i = 1, EdgeDock.config.maxSlots do
             local slot = EdgeDock.slots[i]
             if slot and slot.winId and slot.winId ~= 0 then
-                local win = hs.window.get(slot.winId)
-                if win then
-                    hasAnyWindow = true
-                    if win:isStandard() then
-                        allAbnormal = false
-                        break
-                    end
+                if not EdgeDock.isSlotWindowAlive(slot) then
+                    -- 窗口已经没了：正常进入验证/清理流程
+                    allAbnormal = false
+                    break
+                end
+                hasAnyWindow = true
+                local ok, standard = pcall(function() return slot.win:isStandard() end)
+                if not ok or standard then
+                    allAbnormal = false
+                    break
                 end
             end
         end
@@ -1920,19 +2009,21 @@ function EdgeDock.start()
                         isAbnormalState = true
                         print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") winId=" .. tostring(slot.winId) .. " 无效，可能是休眠后的临时状态，跳过")
                     else
-                        -- 检查2: 窗口存在但变成非标准窗口（休眠后常见）
-                        local win = hs.window.get(slot.winId)
-                        if win and not win:isStandard() then
-                            isAbnormalState = true
-                            print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 窗口暂时为非标准状态，跳过")
-                        elseif not win then
-                            -- 检查3: 窗口获取失败但应用还在运行（可能是暂时的）
-                            -- 检查应用是否还在运行
+                        -- 检查2: 窗口对象还在但不是标准窗口（休眠后常见）
+                        -- 用缓存对象判断，不再做一次 hs.window.get（30-40 ms）
+                        local win = slot.win
+                        if win then
+                            local okStd, standard = pcall(function() return win:isStandard() end)
+                            if not okStd or not standard then
+                                isAbnormalState = true
+                                print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 窗口暂时为非标准状态，跳过")
+                            end
+                        else
+                            -- 检查3: 没有缓存对象但应用还在运行（可能是暂时的）
                             local app = EdgeDock.resolveApp(slot.appName, slot.winId, slot.winTitle)
                             if app then
-                                -- 应用还在，但窗口获取不到，可能是暂时的
                                 isAbnormalState = true
-                                print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 应用还在但窗口获取失败，可能是临时状态，跳过")
+                                print(prefix .. " [VALIDATION_TIMER] 槽位 " .. i .. " (" .. (slot.appName or "unknown") .. ") 应用还在但窗口对象缺失，可能是临时状态，跳过")
                             end
                         end
                     end
@@ -1991,7 +2082,8 @@ function EdgeDock.stop()
         end
     end
     EdgeDock.bars = {}
-    EdgeDock.currentBarScreen = nil
+    EdgeDock.currentBarScreenId = nil
+    EdgeDock.screenCache = nil
 
     if EdgeDock.mask then
         EdgeDock.mask:delete()
