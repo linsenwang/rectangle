@@ -24,6 +24,25 @@ EdgeDock = {
 -- 缓存应用颜色
 EdgeDock.appColorCache = {}
 
+-- hs.timer.doAfter 返回的 timer 如果不保留引用，可能被 Lua GC 回收，回调不会执行。
+-- 配置重载时 GC 尤其容易触发，恢复槽位的 1 秒延时器就是这样丢掉的。
+-- 统一把一次性 timer 放进表里保活，触发后自动移除。
+local oneShotTimers = {}
+local function after(seconds, fn)
+    local timer
+    timer = hs.timer.doAfter(seconds, function()
+        for i = #oneShotTimers, 1, -1 do
+            if oneShotTimers[i] == timer then
+                table.remove(oneShotTimers, i)
+                break
+            end
+        end
+        fn()
+    end)
+    table.insert(oneShotTimers, timer)
+    return timer
+end
+
 -- 检测当前外观模式（深色/浅色），复用统一弹窗模块的检测逻辑
 function EdgeDock.getAppearanceMode()
     return Alert.appearance()
@@ -706,7 +725,7 @@ function EdgeDock.restoreState()
     print(prefix .. " [RESTORE_STATE] 开始恢复，文件中有 " .. #state .. " 个槽位记录")
     
     -- 延迟恢复，等待应用启动
-    hs.timer.doAfter(1, function()
+    after(1, function()
         -- 标记启动完成，此后 refreshBars 可以保存状态
         EdgeDock._startupComplete = true
         
@@ -888,7 +907,7 @@ function EdgeDock.restoreState()
                 -- 微信主窗口可能刚启动/刚唤醒，窗口的 AX 标准状态尚未就绪，重试几次
                 if not targetWin and strictWeChatMain and attempt < 3 then
                     print(prefix .. " [RESTORE_STATE]   微信主窗口暂不可用，1 秒后重试 (" .. (attempt + 1) .. "/3)")
-                    hs.timer.doAfter(1, function()
+                    after(1, function()
                         doRestore(EdgeDock.resolveApp(item.appName, item.winId, item.winTitle), attempt + 1)
                     end)
                     return
@@ -904,7 +923,7 @@ function EdgeDock.restoreState()
                 print(prefix .. " [RESTORE_STATE]   尝试启动应用: " .. item.appName)
                 hs.application.launchOrFocus(item.appName)
                 -- 异步等待应用启动，不再 usleep 阻塞主线程
-                hs.timer.doAfter(0.5, function()
+                after(0.5, function()
                     app = EdgeDock.resolveApp(item.appName, item.winId, item.winTitle)
                     if app then
                         print(prefix .. " [RESTORE_STATE]   应用启动成功: " .. item.appName)
@@ -1469,7 +1488,7 @@ function EdgeDock.peekWindow(slotIndex)
         win:raise()
         win:focus()
         -- 稍微延迟再次确保置顶
-        hs.timer.doAfter(0.05, function()
+        after(0.05, function()
             if win and win:isStandard() then
                 win:raise()
                 win:focus()
@@ -1734,7 +1753,7 @@ EdgeDock.appWatcher = hs.application.watcher.new(function(appName, eventType, ap
     if eventType == hs.application.watcher.terminated then
         print(prefix .. " [APP_WATCHER] 收到应用关闭事件: " .. (appName or "unknown") .. ", 延迟5秒后检查...")
         -- 增加延迟到 5 秒，给系统更多恢复时间，避免误判休眠唤醒为应用关闭
-        hs.timer.doAfter(5, function()
+        after(5, function()
             -- 检查所有槽位
             local changed = false
             print(prefix .. " [APP_WATCHER] 开始检查槽位 (触发应用: " .. (appName or "unknown") .. ")")
@@ -1768,7 +1787,7 @@ end)
 
 -- 屏幕变化时重新定位
 EdgeDock.screenWatcher = hs.screen.watcher.new(function()
-    hs.timer.doAfter(0.3, function()
+    after(0.3, function()
         EdgeDock.refreshScreenCache()
         EdgeDock.currentBarScreenId = EdgeDock.getCurrentScreenObject():id()
         EdgeDock.refreshBars()
@@ -1822,7 +1841,7 @@ EdgeDock.caffeinateWatcher = hs.caffeinate.watcher.new(function(eventType)
         end
         -- 延迟 5 秒后恢复验证定时器并验证槽位
         print(prefix .. " [CAFFEINATE] 5秒后开始验证槽位...")
-        hs.timer.doAfter(5, function()
+        after(5, function()
             print(prefix .. " [CAFFEINATE] 开始验证槽位...")
             -- 唤醒后强制验证所有槽位，优先尝试重新连接
             local reconnectedCount = 0
@@ -1926,7 +1945,7 @@ EdgeDock.appearanceWatcher = hs.distributednotifications.new(function()
     print("[EdgeDock] 外观模式变化，刷新颜色")
     -- 清除颜色缓存，让应用颜色根据新模式重新计算
     EdgeDock.appColorCache = {}
-    hs.timer.doAfter(0.5, function()
+    after(0.5, function()
         EdgeDock.refreshBars()
         EdgeDock.refreshMask()
     end)

@@ -17,6 +17,24 @@ local WECHAT_POLL_INTERVAL = 0.5
 -- 等待微信主窗口重新打开的轮询计时器（同一时间只允许一个）
 local wechatReopenTimer = nil
 
+-- hs.timer.doAfter 返回的 timer 如果不保留引用，可能被 Lua GC 回收，回调不会执行。
+-- 自动停靠的延迟动作（启动后等待窗口、恢复后延迟贴边）必须保活。
+local oneShotTimers = {}
+local function after(seconds, fn)
+    local timer
+    timer = hs.timer.doAfter(seconds, function()
+        for i = #oneShotTimers, 1, -1 do
+            if oneShotTimers[i] == timer then
+                table.remove(oneShotTimers, i)
+                break
+            end
+        end
+        fn()
+    end)
+    table.insert(oneShotTimers, timer)
+    return timer
+end
+
 local function isWeChatName(appName)
     local lower = string.lower(appName or "")
     return lower == "wechat" or lower == "weixin" or lower == "微信"
@@ -167,7 +185,7 @@ local function startDockWhenWeChatMainAppears(targetSlot, showWhenReady, preserv
         if win then
             stopWeChatReopenWait()
             -- 等窗口完成创建/布局再停靠，避免记录到错误的原始位置
-            hs.timer.doAfter(0.5, function()
+            after(0.5, function()
                 local mainWin = findWeChatMainWindow() or win
                 -- 等待期间保留了原槽位记录，真正停靠前再清掉，避免被当成已占用
                 if preserved then
@@ -313,7 +331,7 @@ EdgeDock.autoDockWatcher = hs.application.watcher.new(function(appName, eventTyp
                 return
             end
             print("[AutoDock] WeChat 启动，等待主窗口创建...")
-            hs.timer.doAfter(1.5, function()
+            after(1.5, function()
                 autoDockWeChat(true)
             end)
             return
@@ -327,7 +345,7 @@ EdgeDock.autoDockWatcher = hs.application.watcher.new(function(appName, eventTyp
 
         print("[AutoDock] " .. appName .. " 启动，等待窗口创建...")
 
-        hs.timer.doAfter(1.5, function()
+        after(1.5, function()
             local app = hs.application.get(appName)
             if not app then
                 print("[AutoDock] 无法获取应用: " .. appName)
@@ -380,7 +398,7 @@ EdgeDock.autoDockWindowFilter:subscribe(hs.window.filter.windowCreated, function
     if not targetSlot then return end
 
     -- 等窗口完成布局再贴边
-    hs.timer.doAfter(0.8, function()
+    after(0.8, function()
         -- 重开流程的轮询会负责停靠，这里不重复处理
         if wechatReopenTimer then return end
         local mainWin = findWeChatMainWindow()
