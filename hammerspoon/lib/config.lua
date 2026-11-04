@@ -442,25 +442,26 @@ function pickWeChatMainWindow(app, candidateWin)
         ["WeChat (Window)"] = true,
     }
 
-    -- 判断窗口是否已经在 Edge Dock 槽位里（避免重复钉同一个已隐藏的窗口）
-    -- 预先构建槽位窗口 ID 集合，避免每个候选窗口都线性扫描槽位
-    local dockedWinIds = {}
+    -- 判断窗口是否被 Edge Dock 隐藏（避免把看不见的槽位窗口当成用户正在操作的窗口）
+    -- 只收集 isShowing=false 的槽位：窗口滑出显示时是可见、可聚焦的，
+    -- 不能因为它的 winId 还在槽位里就排除，否则聚焦主窗口按快捷键会误操作其他微信窗口。
+    local dockedHiddenWinIds = {}
     if EdgeDock and EdgeDock.slots then
         for _, slot in pairs(EdgeDock.slots) do
-            if slot and slot.winId then
-                dockedWinIds[slot.winId] = true
+            if slot and slot.winId and not slot.isShowing then
+                dockedHiddenWinIds[slot.winId] = true
             end
         end
     end
 
-    local function isDockedWindow(win)
+    local function isDockedHiddenWindow(win)
         if not win then return false end
         local wid = win:id()
-        return wid ~= nil and dockedWinIds[wid] == true or false
+        return wid ~= nil and dockedHiddenWinIds[wid] == true or false
     end
 
     -- 判断窗口能不能作为「用户正在操作的窗口」：标准窗口、未最小化、拿得到有效 id、
-    -- 未被 Edge Dock 占用、没被藏到屏幕外、尺寸正常。
+    -- 未被 Edge Dock 隐藏、没被藏到屏幕外、尺寸正常。
     -- 注意：这里不按标题否定窗口——文章窗口和搜索窗口同名，按标题否定会把用户正在调整的
     -- 文章窗口换成公众号窗口，导致这两个窗口无法区分
     local function isUsableWindow(win)
@@ -474,7 +475,7 @@ function pickWeChatMainWindow(app, candidateWin)
         local okMin, minimized = pcall(function() return win:isMinimized() end)
         if okMin and minimized then return false end
 
-        if isDockedWindow(win) then return false end
+        if isDockedHiddenWindow(win) then return false end
 
         local okFrame, frame = pcall(function() return win:frame() end)
         if not okFrame or not frame or frame.w < 50 or frame.h < 50 then return false end

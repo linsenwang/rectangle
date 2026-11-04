@@ -9,7 +9,9 @@
 -- 自动停靠一律不碰，避免把聊天/小程序窗口贴到槽位。
 local WECHAT_BUNDLE_ID = "com.tencent.xinWeChat"
 local WECHAT_MAIN_TITLES = { ["WeChat"] = true, ["Weixin"] = true, ["微信"] = true }
-local WECHAT_REOPEN_TIMEOUT = 10   -- 重新打开主窗口最长等待秒数
+-- 唤醒/显示器重排时微信窗口可能十几秒都取不到，10 秒会过早放弃；
+-- 超时后没有后续事件再触发停靠，所以这里留足恢复时间。
+local WECHAT_REOPEN_TIMEOUT = 60
 local WECHAT_POLL_INTERVAL = 0.5
 
 -- 等待微信主窗口重新打开的轮询计时器（同一时间只允许一个）
@@ -167,6 +169,12 @@ local function startDockWhenWeChatMainAppears(targetSlot, showWhenReady, preserv
             -- 等窗口完成创建/布局再停靠，避免记录到错误的原始位置
             hs.timer.doAfter(0.5, function()
                 local mainWin = findWeChatMainWindow() or win
+                -- 等待期间保留了原槽位记录，真正停靠前再清掉，避免被当成已占用
+                if preserved then
+                    local oldSlot = EdgeDock.slots[targetSlot]
+                    if oldSlot and oldSlot.hideTimer then oldSlot.hideTimer:stop() end
+                    EdgeDock.slots[targetSlot] = nil
+                end
                 local docked = dockWeChatMainWindow(mainWin, targetSlot)
                 if docked then
                     local newSlot = EdgeDock.slots[targetSlot]
@@ -270,15 +278,18 @@ function EdgeDock.recoverSlotWindow(slotIndex)
         return true
     end
 
-    print("[AutoDock] 槽位 " .. slotIndex .. " 的微信窗口已关闭，立即重新打开主窗口")
+    print("[AutoDock] 槽位 " .. slotIndex .. " 暂时找不到微信主窗口，重新打开并等待恢复")
 
     -- 保存原槽位的恢复目标：重开后的窗口位置可能已经变了，
     -- 不能把临时位置当成 originalFrame。
     local preserved = { originalFrame = slot.originalFrame, mode = slot.mode }
 
-    -- 旧槽位指向的窗口已经不存在，先清掉记录，避免把死窗口当成占用
+    -- 等待期间保留槽位记录和 originalFrame：窗口可能只是唤醒后暂时取不到，
+    -- 立刻清槽会让 bar 消失，恢复超时后也没有入口再重试。
     if slot.hideTimer then slot.hideTimer:stop() end
-    EdgeDock.slots[slotIndex] = nil
+    slot.isShowing = false
+    slot.centeredPaused = false
+    slot.wasMouseInWindow = false
     EdgeDock.refreshBars()
     EdgeDock.saveState()
 
