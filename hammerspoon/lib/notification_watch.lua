@@ -1,6 +1,6 @@
 -- ============================================
 -- 通知监听：通知内容命中关键词时自动执行命令（签到）
---           并自动复制「信息」通知里的验证码
+--           并自动复制 / 粘贴「信息」通知里的验证码
 -- ============================================
 -- 原理：macOS 的通知横幅在「通知中心」(com.apple.notificationcenterui) 进程的
 --       AX 树里是 subrole = AXNotificationCenterBanner 的元素，其 AXDescription
@@ -51,6 +51,7 @@ local stateDirty = false
 local saveScheduled = false
 local lastTriggerAt = 0
 local runningTask = nil      -- 正在执行的 hs.task
+local pasteTimer = nil       -- 待执行的自动粘贴定时器
 
 local function cfg()
     return NotificationWatchConfig or {}
@@ -142,10 +143,10 @@ local function hitKeyword(text)
 end
 
 -- ============================================
--- 信息验证码自动复制
+-- 信息验证码自动复制 / 粘贴
 -- ============================================
 -- 只处理「信息」应用的通知：识别到验证码后把验证码本身写进剪贴板，
--- 再用 lib/alert.lua 的统一样式弹一个「✅ 验证码」提示。
+-- 默认再直接按一次 Cmd+V 粘贴到前台应用，最后用 lib/alert.lua 的统一样式弹提示。
 
 local CODE_KEYWORDS = {
     "验证码", "校验码", "验证代码", "动态码", "动态密码", "确认码", "安全码",
@@ -205,6 +206,88 @@ local function isFromApp(el, names)
     return false
 end
 
+-- 自动粘贴的可用性判断 ============================================
+
+-- 能接收文字的控件角色
+local EDITABLE_ROLES = {
+    AXTextField = true,
+    AXTextArea = true,
+    AXComboBox = true,
+    AXSearchField = true,
+}
+
+-- 浏览器 / Electron 的输入框常被报成这些角色，判断不了时按「可以粘贴」处理
+local UNKNOWN_FOCUS_ROLES = {
+    AXWebArea = true,
+    AXGroup = true,
+    AXUnknown = true,
+}
+
+-- 这些前台应用不粘贴（系统界面发过去的按键不会进到输入框）
+local SKIP_PASTE_BUNDLE_IDS = {
+    [NC_BUNDLE_ID] = true,
+    ["com.apple.loginwindow"] = true,
+    ["com.apple.ScreenSaver.Engine"] = true,
+}
+
+-- 当前是否可以把验证码粘到前台应用里：前台不是系统界面，
+-- 且焦点没有明确停在密码框或按钮等收不到文字的控件上
+local function canAutoPaste()
+    local app = hs.application.frontmostApplication()
+    if not app then return false end
+    local bundleID = app:bundleID()
+    if bundleID and SKIP_PASTE_BUNDLE_IDS[bundleID] then return false end
+
+    local ok, el = pcall(function()
+        return hs.axuielement.systemWideElement():attributeValue("AXFocusedUIElement")
+    end)
+    if not ok or not el then return true end
+
+    local role = attr(el, "AXRole")
+    if type(role) ~= "string" or UNKNOWN_FOCUS_ROLES[role] then return true end
+    if attr(el, "AXSubrole") == "AXSecureTextField" then return false end
+    return EDITABLE_ROLES[role] == true
+end
+
+local function showCodeAlert(text, timeout)
+    if _G.Alert and _G.Alert.show then
+        _G.Alert.show(text, { channel = "verification-code", timeout = timeout })
+    else
+        hs.alert.show(text, { atScreenEdge = 1 })
+    end
+end
+
+-- 复制后：先立刻弹提示（和原来的行为一致），再延迟一点给前台应用发 Cmd+V，
+-- 等剪贴板写好、通知横幅事件结束。粘贴只发按键事件，不会切换窗口或抢焦点。
+local function pasteAndNotify(code, conf)
+    local timeout = conf.alertTimeout or 3
+    showCodeAlert("✅ " .. code, timeout)
+
+    if conf.autoPaste == false then
+        return
+    end
+    if conf.pasteOnlyInTextFields ~= false and not canAutoPaste() then
+        log("跳过自动粘贴：前台不是输入框")
+        return
+    end
+
+    pasteTimer = hs.timer.doAfter(conf.pasteDelay or 0.3, function()
+        pasteTimer = nil
+        if conf.pasteOnlyInTextFields ~= false and not canAutoPaste() then
+            log("跳过自动粘贴：前台应用已切换")
+            return
+        end
+
+        local ok, err = pcall(hs.eventtap.keyStroke, {"cmd"}, "v", 50000)
+        if not ok then
+            log("自动粘贴失败：%s", tostring(err))
+            return
+        end
+
+        log("已自动粘贴验证码：%s", code)
+    end)
+end
+
 local lastCopiedCode = nil
 local lastCopiedAt = 0
 
@@ -230,11 +313,7 @@ local function handleVerificationCode(el, text)
     end
 
     log("已复制验证码：%s", code)
-    if _G.Alert and _G.Alert.show then
-        _G.Alert.show("✅ " .. code, { channel = "verification-code", timeout = conf.alertTimeout or 3 })
-    else
-        hs.alert.show("✅ " .. code)
-    end
+    pasteAndNotify(code, conf)
     return true
 end
 
@@ -496,6 +575,10 @@ end
 -- 停止监听（供重载或手动关闭使用）
 function M.stop()
     stopObserver()
+    if pasteTimer then
+        pasteTimer:stop()
+        pasteTimer = nil
+    end
     if healthTimer then
         healthTimer:stop()
         healthTimer = nil

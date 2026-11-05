@@ -8,11 +8,12 @@
 --   · 顶部贴边的弹窗在带刘海的屏幕上自动下移，让开刘海和菜单栏那一条
 -- 用法：
 --   Alert.show("文字", { timeout = 2 })
---   Alert.show("文字", { channel = "ocr", edge = 1, align = "right", timeout = 3 })
+--   Alert.show("文字", { channel = "ocr", align = "right", timeout = 3 })
+--   Alert.show("文字", { edge = 0, timeout = 2 })   -- 需要屏幕居中时显式指定
 -- 参数（opts，均可省略）：
 --   timeout  显示时长（秒），默认 Alert.defaultTimeout
 --   channel  互斥通道名，默认 "default"（同一通道的新弹窗会关闭旧的）
---   edge     贴边位置：0=居中 1=顶部 2=底部（对应 hs.alert 的 atScreenEdge；顶部会自动避开刘海）
+--   edge     贴边位置：0=居中 1=顶部（默认） 2=底部（对应 hs.alert 的 atScreenEdge；顶部会自动避开刘海）
 --   align    文字对齐：left / center / right
 --   replace  是否顶掉同通道旧弹窗，默认 true
 
@@ -120,10 +121,9 @@ function Alert.show(message, opts)
         channels[channel] = nil
     end
 
-    local style = {}
-    if opts.edge then
-        style.atScreenEdge = opts.edge
-    end
+    local style = {
+        atScreenEdge = opts.edge or 1,   -- 默认顶部贴边
+    }
     if opts.align then
         style.textStyle = { alignment = opts.align }
     end

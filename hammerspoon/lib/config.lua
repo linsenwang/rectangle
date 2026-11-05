@@ -243,10 +243,11 @@ NotificationWatchConfig = {
 }
 
 -- ============================================
--- 信息验证码自动复制配置
+-- 信息验证码自动复制 / 粘贴配置
 -- ============================================
 -- 通知监听（notification_watch）识别到这些应用的通知里含验证码时，
--- 把验证码本身写入剪贴板，并用统一弹窗提示（见 lib/alert.lua）。
+-- 把验证码本身写入剪贴板，默认再直接粘贴到当前前台应用的输入框里，
+-- 并用统一弹窗提示（见 lib/alert.lua）。
 
 VerificationCodeConfig = {
     enabled = true,
@@ -254,6 +255,10 @@ VerificationCodeConfig = {
     appNames = {"信息", "Messages", "iMessage"},
     alertTimeout = 3,     -- 弹窗显示时长（秒）
     dedupeSeconds = 30,   -- 同一验证码在此时间内重复出现时不再复制
+    autoPaste = true,     -- 复制后直接按 Cmd+V 粘贴到前台应用（false 则只复制）
+    pasteDelay = 0,     -- 自动粘贴前等待的秒数（等剪贴板写入、横幅事件结束）
+    -- 只在焦点是输入框时粘贴，避免把验证码打进密码框、按钮等位置
+    pasteOnlyInTextFields = false,
 }
 
 -- ============================================
