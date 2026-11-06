@@ -13,6 +13,7 @@ pcall(function() require("hs.ipc") end)
 require("config")          -- 配置、边距、工具函数
 require("alert")           -- 统一弹窗（需早于其它模块加载）
 require("rectangle")       -- 窗口管理核心（半屏/全屏/居中/四角等）
+require("mouse_snap")      -- 鼠标贴边吸附（拖动窗口到边缘）
 require("layout")          -- 布局保存/恢复
 require("edge_dock")       -- Edge Dock（必须在 tiling 之前加载）
 require("tiling")          -- 窗口平铺（依赖 EdgeDock）
