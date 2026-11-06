@@ -524,6 +524,7 @@ function WindowProfile.describe(mode)
     elseif t == "top-half" then return "上半屏"
     elseif t == "bottom-half" then return "下半屏"
     elseif t == "center" then return "居中"
+    elseif t == "center-two-thirds" then return "居中 2/3"
     elseif t == "third" then return THIRD_NAMES[mode.pos] or "1/3"
     elseif t == "corner" then return CORNER_NAMES[mode.pos] or "1/4"
     elseif t == "full-height" then

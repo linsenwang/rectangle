@@ -3,29 +3,35 @@
 --
 -- 拖动窗口时：
 --   左右边缘 -> 半屏
---   顶部     -> 最大化（沿用应用边距）
 --   四角     -> 1/4 屏
+--   顶部     -> 左 1/3 / 左 2/3 / 居中 2/3 / 右 2/3 / 右 1/3
+--               （按鼠标水平位置决定，详见 topStripZone）
+--
+-- 顶部判定用「窗口上沿」而不是鼠标 Y 坐标：
+--   窗口上沿顶到可用区上沿（菜单栏下方）时触发，
+--   这样抓住标题栏任意位置拖上去都能触发，不需要把鼠标推进菜单栏。
 --
 -- 性能要点：
 --   1. 不监听 leftMouseDragged。拖动事件全部交给系统原生处理，
---      避免每个事件同步穿过 Lua 桥导致掉帧（hs.eventtap 的已知问题）。
---   2. 用 60Hz 定时器轮询鼠标位置和按键，高频路径只有两次轻量 API 调用
---      + 纯 Lua 的坐标判断。
+--      避免每个事件同步穿过 Lua 桥导致掉帧。
+--   2. 用 60Hz 定时器轮询鼠标位置和按键，空闲时不读鼠标位置。
 --   3. 拖动过程中只画 hs.canvas 预览，松开鼠标时才真正设置窗口 frame。
---      实时调用 win:setFrame() 会因 AX 桥接产生明显卡顿。
---   4. 预览只在跨越吸附区域时更新一次，窗口 frame 只用于确认「真的在拖窗口」。
+--   4. 窗口 frame 只在需要确认「真的在拖窗口」和「是否到顶」时读取，
+--      并做 80ms 节流。
 -- ============================================
 
 local M = {}
 
 local cfg = MouseSnapConfig or {}
 local EDGE = cfg.edgeSize or 24
-local TOP_EDGE = cfg.topEdgeSize or 10
-local CORNER_RATIO = cfg.cornerRatio or 0.15
+local TOP_BAND = cfg.topBand or 160
+local TOP_WINDOW_MARGIN = cfg.topWindowMargin or 20
+local CORNER_RATIO = cfg.cornerRatio or 0.08
 local MIN_DRAG = cfg.minDrag or 20
 local MIN_FRAME_CHANGE = cfg.minFrameChange or 8
+local TITLE_BAR_MAX = cfg.titleBarMax or 100
 local FRAME_CHECK_INTERVAL = 0.08
-local APPLY_DELAY = 0.01
+local APPLY_DELAY = 0.08
 local POLL_INTERVAL = 1 / 60
 
 local preview = nil
@@ -77,14 +83,17 @@ local function windowAtPoint(point)
 end
 
 -- 一次性缓存所有屏幕的 frame 与可用区域，拖动期间不再查询屏幕 API
+-- frame 是可见区域（菜单栏下方），用于布局；hitFrame 是全屏区域，用于鼠标命中判断
 local function collectScreens(win)
     local screens = {}
     for _, screen in ipairs(hs.screen.allScreens()) do
         local ok, frame = pcall(function() return screen:frame() end)
+        local okFull, full = pcall(function() return screen:fullFrame() end)
         if ok and frame then
             screens[#screens + 1] = {
                 screen = screen,
                 frame = frame,
+                hitFrame = okFull and full or frame,
                 area = getUsableArea(frame, win),
             }
         end
@@ -92,18 +101,53 @@ local function collectScreens(win)
     return screens
 end
 
+local function entryAtPoint(point, screens)
+    for _, entry in ipairs(screens) do
+        if pointInFrame(point, entry.hitFrame or entry.frame) then return entry end
+    end
+    return nil
+end
+
 -- ============================================
 -- 吸附区域判断（纯 Lua）
 -- ============================================
 
+-- 顶部横向分区（按可用区宽度）：
+--   最左 1/6      -> 左 1/3
+--   左 1/6 ~ 1/3  -> 左 2/3
+--   中间 1/3      -> 居中 2/3
+--   右 1/3 ~ 5/6  -> 右 2/3
+--   最右 1/6      -> 右 1/3
+local function topStripZone(point, entry)
+    local area = entry.area
+    local rel = (point.x - area.x) / area.w
+    if rel < 0 then rel = 0 elseif rel > 1 then rel = 1 end
+
+    if rel < 1 / 6 then
+        return { type = "third", pos = 1, isTop = true }
+    elseif rel < 1 / 3 then
+        return { type = "left-half", ratio = 2 / 3, isTop = true }
+    elseif rel <= 2 / 3 then
+        return { type = "center-two-thirds", isTop = true }
+    elseif rel <= 5 / 6 then
+        return { type = "right-half", ratio = 2 / 3, isTop = true }
+    else
+        return { type = "third", pos = 3, isTop = true }
+    end
+end
+
+local function zoneKey(zone)
+    if not zone then return nil end
+    return zone.type .. "|" .. tostring(zone.pos) .. "|" .. tostring(zone.ratio)
+end
+
 local function zoneAt(point, screens)
     for _, entry in ipairs(screens) do
         local frame = entry.frame
-        if pointInFrame(point, frame) then
+        if pointInFrame(point, entry.hitFrame or frame) then
             local area = entry.area
             local nearLeft = point.x <= frame.x + EDGE
             local nearRight = point.x >= frame.x + frame.w - EDGE
-            local nearTop = point.y <= frame.y + TOP_EDGE
 
             local cornerH = math.min(math.max(area.h * CORNER_RATIO, 50), 120)
             local inTopCorner = point.y <= area.y + cornerH
@@ -121,8 +165,6 @@ local function zoneAt(point, screens)
                 return { type = "left-half", ratio = 0.5 }, entry
             elseif nearRight then
                 return { type = "right-half", ratio = 0.5 }, entry
-            elseif nearTop then
-                return { type = "maximized" }, entry
             end
             return nil, entry
         end
@@ -184,32 +226,49 @@ local function resetState()
     hidePreview()
 end
 
-local function initDrag(point)
+local function initDrag(point, now)
     local win = windowAtPoint(point)
     if not win then return nil end
 
     local ok, frame = pcall(function() return win:frame() end)
     if not ok or not frame then return nil end
 
+    local screens = collectScreens(win)
+
+    -- 鼠标按下点距离窗口上沿很近 → 认为抓的是标题栏。
+    -- 窗口贴顶拖不动时，用它来区分「拖窗口」和「选文字/拖文件」。
+    local grabOffsetY = point.y - frame.y
+    local titleBarDrag = grabOffsetY >= 0 and grabOffsetY <= TITLE_BAR_MAX
+
     return {
         win = win,
         initialized = true,
         baseFrame = frame,
-        screens = collectScreens(win),
+        currentFrame = frame,
+        frameTime = now,
+        screens = screens,
+        titleBarDrag = titleBarDrag,
         armed = false,
         invalid = false,
-        lastCheck = 0,
     }
 end
 
--- 确认窗口真的被移动（而不是选文字/拖文件）：位置变化且尺寸基本不变
-local function checkFrameChanged(st)
-    local ok, frame = pcall(function() return st.win:frame() end)
-    if not ok or not frame then
-        st.invalid = true
-        return false, false
+-- 读取窗口 frame，80ms 内复用缓存
+local function getFrame(st, now, force)
+    if force or not st.frameTime or now - st.frameTime >= FRAME_CHECK_INTERVAL then
+        local ok, frame = pcall(function() return st.win:frame() end)
+        if not ok or not frame then
+            st.invalid = true
+            return nil
+        end
+        st.currentFrame = frame
+        st.frameTime = now
     end
+    return st.currentFrame
+end
 
+-- 确认窗口真的被移动（而不是选文字/拖文件）：位置变化且尺寸基本不变
+local function frameChanged(st, frame)
     local base = st.baseFrame
     local moved = math.abs(frame.x - base.x) > MIN_FRAME_CHANGE
                or math.abs(frame.y - base.y) > MIN_FRAME_CHANGE
@@ -218,18 +277,21 @@ local function checkFrameChanged(st)
     return moved, resized
 end
 
-local function shouldArm(st, now)
-    if st.armed or st.invalid then return st.armed end
-    if now - st.lastCheck < FRAME_CHECK_INTERVAL then return false end
-    st.lastCheck = now
+local function shouldArm(st, now, zone)
+    if st.armed or st.invalid then return end
 
-    local moved, resized = checkFrameChanged(st)
+    local frame = getFrame(st, now)
+    if not frame then return end
+
+    local moved, resized = frameChanged(st, frame)
     if resized then
         st.invalid = true
-        return false
+        return
     end
-    if moved then st.armed = true end
-    return st.armed
+    -- 窗口已经贴顶时拖不动；只要抓的是标题栏、并且当前是顶部区域，也算在拖窗口
+    if moved or (st.titleBarDrag and zone and zone.isTop) then
+        st.armed = true
+    end
 end
 
 local function updatePreview(st, zone, entry)
@@ -256,27 +318,76 @@ local function applySnap(win, zone, entry)
     end
 
     local target = layoutFrameFor(zone, entry.frame, win)
-    if target then setWinFrame(win, target) end
+    if not target then return end
+
+    setWinFrame(win, target)
+
+    -- 原生拖动刚结束时，macOS/应用偶尔只接受位置、不接受尺寸。
+    -- 稍后回读校验，尺寸不对就补一次（拖动会话可能结束得比较晚，校验两次）。
+    local function verify(delay)
+        hs.timer.doAfter(delay, function()
+            if not isEligible(win) then return end
+            local okNow, nowFrame = pcall(function() return win:frame() end)
+            if not okNow or not nowFrame then return end
+
+            local atTarget = math.abs(nowFrame.x - target.x) <= 8
+                         and math.abs(nowFrame.y - target.y) <= 8
+            local sizeOK = math.abs(nowFrame.w - target.w) <= 4
+                       and math.abs(nowFrame.h - target.h) <= 4
+            if atTarget and not sizeOK then
+                setWinFrame(win, target)
+            end
+        end)
+    end
+    verify(0.15)
+    verify(0.35)
 end
 
 -- ============================================
 -- 轮询状态机
 -- ============================================
 
-local function finishDrag(st)
-    if not st or not st.initialized or st.invalid then return end
-    if not st.zone or not st.entry then return end
+-- 计算当前鼠标位置对应的吸附区域。顶部区域需要看窗口上沿，
+-- forceFrame=true 时强制读最新 frame（用于松手时的最终判定）。
+local function resolveZone(st, point, now, forceFrame)
+    local zone, entry = zoneAt(point, st.screens)
 
-    -- 鼠标移动很快时可能还没通过节流检查，这里做最终确认
+    -- 左右边缘/四角优先；顶部只在不靠近左右边缘时生效
+    if zone or not entry then return zone, entry end
+
+    -- 和左右边缘一样只看鼠标位置：进入顶部区域、且窗口上沿已经贴近顶部
+    if point.y <= entry.area.y + TOP_BAND then
+        local frame = getFrame(st, now, forceFrame)
+        if frame and frame.y <= entry.area.y + TOP_WINDOW_MARGIN then
+            zone = topStripZone(point, entry)
+        end
+    end
+    return zone, entry
+end
+
+local function finishDrag(st, point)
+    if not st or not st.initialized or st.invalid then return end
+
+    -- 鼠标移动很快时可能还没通过节流检查，这里强制读一次最新 frame
+    local now = hs.timer.secondsSinceEpoch()
+    local frame = getFrame(st, now, true)
+    if not frame then return end
+
+    -- 用松手时的实际位置重算区域，避免最后 80ms 内刚好跨过顶部的判定被漏掉
+    local zone, entry = resolveZone(st, point, now, false)
+    if not zone or not entry then return end
+    st.zone, st.entry = zone, entry
+
+    local moved, resized = frameChanged(st, frame)
     if not st.armed then
-        local moved, resized = checkFrameChanged(st)
-        if not moved or resized then return end
-    else
-        local _, resized = checkFrameChanged(st)
         if resized then return end
+        -- 窗口已经贴顶时拖不动，抓的是标题栏并且当前在顶部区域也算有效拖动
+        if not moved and not (st.titleBarDrag and zone.isTop) then return end
+    elseif resized then
+        return
     end
 
-    local win, zone, entry = st.win, st.zone, st.entry
+    local win = st.win
     hs.timer.doAfter(APPLY_DELAY, function()
         applySnap(win, zone, entry)
     end)
@@ -289,8 +400,9 @@ local function poll()
         if buttonWasDown then
             buttonWasDown = false
             local st = state
+            local point = hs.mouse.absolutePosition()
             resetState()
-            finishDrag(st)
+            finishDrag(st, point)
         end
         return
     end
@@ -314,12 +426,14 @@ local function poll()
     local st = state
     if not st or st.invalid then return end
 
+    local now = hs.timer.secondsSinceEpoch()
+
     if not st.initialized then
         local dx = point.x - st.down.x
         local dy = point.y - st.down.y
         if dx * dx + dy * dy < MIN_DRAG * MIN_DRAG then return end
 
-        local dragState = initDrag(point)
+        local dragState = initDrag(point, now)
         if not dragState then
             st.invalid = true
             return
@@ -329,17 +443,27 @@ local function poll()
         st = dragState
     end
 
-    local zone, entry = zoneAt(point, st.screens)
-    if zone ~= st.zone or entry ~= st.entry then
-        st.zone = zone
-        st.entry = entry
+    local zone, entry = resolveZone(st, point, now, false)
+
+    local wasArmed = st.armed
+    if zone then
+        shouldArm(st, now, zone)
     end
 
-    if zone and not st.armed and not st.invalid then
-        shouldArm(st, hs.timer.secondsSinceEpoch())
+    if not zone then
+        if st.zone ~= nil then
+            st.zone, st.entry, st.zoneKey = nil, entry, nil
+            hidePreview()
+        end
+    elseif st.invalid then
+        hidePreview()
+    else
+        local key = zoneKey(zone)
+        if key ~= st.zoneKey or entry ~= st.entry or (st.armed and not wasArmed) then
+            st.zone, st.entry, st.zoneKey = zone, entry, key
+            updatePreview(st, zone, entry)
+        end
     end
-
-    updatePreview(st, zone, entry)
 end
 
 -- ============================================

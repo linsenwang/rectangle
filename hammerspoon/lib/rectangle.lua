@@ -531,6 +531,12 @@ function detectLayoutModeForFrame(frame, max, win)
             if approx(frame.x, area.x + thirdW + m.inner, 15) then return { type = "third", pos = 2 } end
             if approx(frame.x, area.x + (thirdW + m.inner) * 2, 15) then return { type = "third", pos = 3 } end
         end
+
+        -- 居中 2/3（顶部中间区域）：全高，宽度为可用宽度的 2/3，水平居中
+        if approx(frame.w, usableW * 2/3, 50)
+           and approx(frame.x + frame.w / 2, area.x + area.w / 2, 20) then
+            return { type = "center-two-thirds" }
+        end
     end
 
     -- 4. 居中：水平、垂直都居中，记录可用区相对尺寸
@@ -636,6 +642,11 @@ function layoutFrameFor(mode, max, win)
         local newX = max.x + max.w * (mode.relX or 0)
         newX = math.max(max.x, math.min(newX, max.x + max.w - newW))
         return hs.geometry.rect(newX, area.y, newW, area.h)
+    elseif mode.type == "center-two-thirds" then
+        -- 居中 2/3：宽度取可用宽度的 2/3，全高，水平居中
+        local usableW = max.w - m.left - m.right - m.inner
+        local w = usableW * 2/3
+        return hs.geometry.rect(area.x + (area.w - w) / 2, area.y, w, area.h)
     elseif mode.type == "center" then
         -- 在可用区域内居中，尺寸按记录的比例缩放
         local w = math.min(mode.relW * area.w, area.w)
@@ -805,6 +816,8 @@ local function positionForMode(mode, max, win, w, h)
         if t == "free" then
             y = max.y + max.h * (mode.relY or 0)
         end
+    elseif t == "center-two-thirds" then
+        x = area.x + (area.w - w) / 2
     elseif t == "center" then
         x = area.x + (area.w - w) / 2
         y = area.y + (area.h - h) / 2
