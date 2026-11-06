@@ -142,7 +142,7 @@ local function captureAndOcr()
         end
 
         local function announce(prefix)
-            showAlert(prefix .. "\n" .. preview(out, M.config.previewLen))
+            showAlert(prefix .. " " .. preview(out, M.config.previewLen))
         end
 
         if M.config.autoPaste then
@@ -153,8 +153,9 @@ local function captureAndOcr()
             end)
             print(string.format("[OcrShot] 完成 | %d 字符 | 已自动 ⌘V", #out))
         else
-            announce("✅ 已复制到剪贴板")
-            print(string.format("[OcrShot] 完成 | %d 字符", #out))
+            -- announce("✅ 已复制到剪贴板")
+            -- print(string.format("[OcrShot] 完成 | %d 字符", #out))
+            announce(string.format("✅", #out))
         end
     end, {"-c", command})
 
