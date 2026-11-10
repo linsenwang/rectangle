@@ -7,9 +7,9 @@
 --   顶部     -> 左 1/3 / 左 2/3 / 居中 2/3 / 右 2/3 / 右 1/3
 --               （按鼠标水平位置决定，详见 topStripZone）
 --
--- 顶部判定用「窗口上沿」而不是鼠标 Y 坐标：
---   窗口上沿顶到可用区上沿（菜单栏下方）时触发，
---   这样抓住标题栏任意位置拖上去都能触发，不需要把鼠标推进菜单栏。
+-- 顶部判定：
+--   鼠标要进到可用区最顶部几像素（topBand，默认 4px），
+--   同时窗口上沿已经贴近可用区上沿（topWindowMargin）时触发。
 --
 -- 性能要点：
 --   1. 不监听 leftMouseDragged。拖动事件全部交给系统原生处理，
@@ -24,7 +24,7 @@ local M = {}
 
 local cfg = MouseSnapConfig or {}
 local EDGE = cfg.edgeSize or 24
-local TOP_BAND = cfg.topBand or 160
+local TOP_BAND = cfg.topBand or 4
 local TOP_WINDOW_MARGIN = cfg.topWindowMargin or 20
 local CORNER_RATIO = cfg.cornerRatio or 0.08
 local MIN_DRAG = cfg.minDrag or 20
