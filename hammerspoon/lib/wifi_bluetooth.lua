@@ -1,5 +1,5 @@
 -- ============================================
--- 连接指定 Wi-Fi 时自动打开蓝牙
+-- 连接指定 Wi-Fi 或指定有线网络时自动打开蓝牙
 -- 依赖 blueutil（brew install blueutil）
 -- macOS 14+ 读取 SSID 需授予 Hammerspoon 定位权限
 -- ============================================
@@ -9,8 +9,11 @@ WifiBluetooth = WifiBluetooth or {}
 local config = {
     -- 匹配的 SSID（Lua 模式，按小写比较），例如 ResNet / ResNet-5G / ResNet-2.4G
     ssidPatterns = { "^resnet" },
+    -- 匹配的有线网络 IPv4 网段（Lua 模式），例如当前路由器分配的 192.168.8.x
+    wiredPatterns = { "^192%.168%.8%." },
     delay = 3,                       -- 检测到连接后等待几秒，等网络稳定
-    checkOnLoad = true,              -- 加载配置时若已连上目标 Wi-Fi 也检查一次
+    checkOnLoad = true,              -- 加载配置时若已连上目标网络也检查一次
+    wiredPollInterval = 2,           -- 有线网络状态轮询间隔（秒）
     blueutil = "/opt/homebrew/bin/blueutil",
 }
 
@@ -92,6 +95,32 @@ local function currentSSID()
     return hs.wifi.currentNetwork()
 end
 
+local function ipMatches(ip)
+    for _, pattern in ipairs(config.wiredPatterns) do
+        if ip:find(pattern) then return true end
+    end
+    return false
+end
+
+-- 有线网络没有 SSID，改用 IPv4 网段判断；返回匹配的活动接口名
+local function currentWired()
+    local wifiDevice = "en0"
+    local wifi = hs.wifi.interfaceDetails()
+    if wifi and wifi.interface then wifiDevice = wifi.interface end
+
+    for _, ifName in ipairs(hs.network.interfaces() or {}) do
+        if ifName ~= wifiDevice then
+            local details = hs.network.interfaceDetails(ifName)
+            local addresses = details and details.IPv4 and details.IPv4.Addresses
+            if details and details.Link and details.Link.Active and addresses then
+                for _, ip in ipairs(addresses) do
+                    if ipMatches(ip) then return ifName end
+                end
+            end
+        end
+    end
+end
+
 local function wifiPowered()
     local details = hs.wifi.interfaceDetails()
     return details and details.power == true
@@ -107,25 +136,27 @@ local function checkSSIDAccess()
     log("ERROR: 读取不到当前 Wi-Fi 名称，Hammerspoon 缺少定位权限；请在 系统设置 > 隐私与安全性 > 定位服务 中允许 Hammerspoon")
 end
 
--- 延迟执行前再次确认仍连着目标 Wi-Fi，避免刚连上又切走时误开
+-- 延迟执行前再次确认仍连着目标网络，避免刚连上又切走时误开
 -- 必须保留 timer 引用，否则配置重载时的 GC 会把它回收，回调不会执行
 local pendingTimer
 
-local function checkAndEnable(ssid)
+local function checkAndEnable(label, stillConnected)
     if pendingTimer then pendingTimer:stop() end
     pendingTimer = hs.timer.doAfter(config.delay, function()
         pendingTimer = nil
-        local now = currentSSID()
-        if ssidMatches(now) then
-            enableBluetooth(now)
+        if stillConnected() then
+            enableBluetooth(label)
         else
-            log("等待期间已离开 " .. tostring(ssid) .. "，跳过")
+            log("等待期间已离开 " .. label .. "，跳过")
         end
     end)
 end
 
 local lastSSID = currentSSID()
 log("启动时读取到 Wi-Fi：" .. tostring(lastSSID))
+
+local lastWired = currentWired()
+log("启动时读取到有线网络：" .. tostring(lastWired))
 
 local function handleWifiChange()
     local ssid = currentSSID()
@@ -140,7 +171,28 @@ local function handleWifiChange()
     end
 
     log("Wi-Fi 切换：" .. tostring(previous) .. " -> " .. ssid)
-    checkAndEnable(ssid)
+    checkAndEnable(ssid, function()
+        return ssidMatches(currentSSID())
+    end)
+end
+
+local function handleWiredChange()
+    local ifName = currentWired()
+    if ifName == lastWired then return end
+
+    local previous = lastWired
+    lastWired = ifName
+
+    if not ifName then
+        log("有线网络断开：" .. tostring(previous) .. " -> nil")
+        return
+    end
+
+    log("有线网络接入：" .. tostring(previous) .. " -> " .. ifName)
+    local label = "有线网络 (" .. ifName .. ")"
+    checkAndEnable(label, function()
+        return currentWired() == ifName
+    end)
 end
 
 if WifiBluetooth.watcher then
@@ -150,10 +202,27 @@ end
 WifiBluetooth.watcher = hs.wifi.watcher.new(handleWifiChange)
 WifiBluetooth.watcher:start()
 
-if config.checkOnLoad and ssidMatches(lastSSID) then
-    checkAndEnable(lastSSID)
+if WifiBluetooth.wiredTimer then
+    WifiBluetooth.wiredTimer:stop()
+end
+
+WifiBluetooth.wiredTimer = hs.timer.new(config.wiredPollInterval, handleWiredChange)
+WifiBluetooth.wiredTimer:start()
+
+if config.checkOnLoad then
+    if ssidMatches(lastSSID) then
+        checkAndEnable(lastSSID, function()
+            return ssidMatches(currentSSID())
+        end)
+    end
+    if lastWired then
+        checkAndEnable("有线网络 (" .. lastWired .. ")", function()
+            return currentWired() == lastWired
+        end)
+    end
 end
 
 checkSSIDAccess()
 
-log("已启动：连接 " .. table.concat(config.ssidPatterns, " / ") .. " 时自动打开蓝牙")
+log("已启动：连接 " .. table.concat(config.ssidPatterns, " / ") ..
+    " Wi-Fi 或 " .. table.concat(config.wiredPatterns, " / ") .. " 有线网段时自动打开蓝牙")

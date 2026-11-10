@@ -24,7 +24,7 @@ require("display_layout")  -- 显示器布局记忆
 require("window_profile")  -- 窗口布局属性：屏幕变化后按属性重排
 require("capswriter")      -- CapsWriter 鼠标侧键触发录音（UDP 控制）
 require("notification_watch")  -- 通知监听：签到通知自动执行脚本 / 信息验证码自动复制并粘贴
-require("wifi_bluetooth")  -- 连接 ResNet Wi-Fi 时自动打开蓝牙
+require("wifi_bluetooth")  -- 连接 ResNet Wi-Fi 或指定有线网络时自动打开蓝牙
 require("iloud_fix")       -- iLoud 首次连接音量过小时自动断开重连
 require("keybindings")     -- 快捷键帮助面板 (Ctrl+Option+/)
 require("ocr_shot")        -- 截图 OCR 成 Markdown(LaTeX) (⇧⌘3)
