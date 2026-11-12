@@ -18,6 +18,7 @@ M.config = {
     mouseEnabled  = capsWriterCfg.mouseEnabled ~= false,  -- 是否启用鼠标侧键（改 lib/config.lua 的 CapsWriterConfig）
     alertTimeout  = 0.8,           -- 弹窗显示时长（秒）
     statusPort    = 6019,          -- 监听 CapsWriter 处理状态回传的 UDP 端口
+    pingTimeout   = 1.5,           -- 探测客户端 PING 回包的最长等待（秒）
 
     -- 键盘快捷键配置（按住录音，松开停止）
     keyMods       = {"shift"},     -- 修饰键数组，如 {"shift"}, {"cmd", "alt"}
@@ -40,6 +41,9 @@ local isRecording = false
 local pressSeq = 0               -- 按键序号：松开时自增，用于丢弃"按下→检查完成"之间已松开的请求
 local udpClient = nil            -- 发送命令的 UDP socket
 local statusSocket = nil         -- 接收状态回传的 UDP socket
+local statusRetryTimer = nil     -- 状态端口绑定失败后的重试定时器
+local clientStarting = false     -- 是否已有启动流程在跑（避免并发拉起两个客户端）
+local startPoller = nil          -- 启动后轮询客户端是否就绪的定时器
 
 -- 显示提示（顶部贴边、右对齐；同通道新提示自动顶掉旧的，避免重叠）
 local function showAlert(message, timeout)
@@ -52,31 +56,31 @@ local function showAlert(message, timeout)
 end
 
 -- 发送 UDP 命令（使用原生 hs.socket.udp，无 shell fork）
+-- 坑：hs.socket.udp:send 必须显式给 host/port，只传消息会报
+-- "incorrect type 'no value' for argument 3 (expected string)"
 local function sendUDP(cmd)
     if not udpClient then
         local ok, sock = pcall(hs.socket.udp.new)
         if ok and sock then
-            local connOk = pcall(function() sock:connect(M.config.host, M.config.port) end)
-            if connOk then
-                udpClient = sock
-                print(string.format("[CapsWriter] UDP 客户端已连接 %s:%d", M.config.host, M.config.port))
-            else
-                showAlert("❌ CapsWriter UDP 连接失败", 2)
-                return
-            end
+            udpClient = sock
+            print(string.format("[CapsWriter] UDP 客户端就绪 %s:%d", M.config.host, M.config.port))
         else
             showAlert("❌ CapsWriter UDP 不可用", 2)
-            return
+            return false
         end
     end
 
-    local ok, err = pcall(function() udpClient:send(cmd) end)
+    local ok, err = pcall(function()
+        udpClient:send(cmd, M.config.host, M.config.port)
+    end)
     if not ok then
         showAlert("❌ CapsWriter UDP 发送失败\n" .. tostring(err), 2)
         -- 连接可能已失效，下次重建
         pcall(function() udpClient:close() end)
         udpClient = nil
+        return false
     end
+    return true
 end
 
 -- 处理 CapsWriter 状态报文
@@ -95,28 +99,68 @@ local function handleStatus(data)
     end
 end
 
--- 启动 UDP 状态监听（接收 CapsWriter 处理状态）
-local function startStatusListener()
-    if statusSocket and not statusSocket:closed() then
-        return
-    end
-
+-- 绑定状态端口
+-- hs.socket 绑定失败不会报错，只会返回一个未绑定（localPort = 0）的 socket，
+-- 所以必须自己检查，否则会误以为监听已启动，之后再也不重试
+local function bindStatusSocket()
     local ok, sock = pcall(function()
         return hs.socket.udp.server(M.config.statusPort, function(data, addr)
             handleStatus(data)
         end):receive()
     end)
 
-    if ok and sock then
+    if not (ok and sock) then
+        return nil, tostring(sock)
+    end
+
+    local bound = false
+    pcall(function()
+        local info = sock:info()
+        bound = info ~= nil and info.localPort == M.config.statusPort
+    end)
+
+    if not bound then
+        pcall(function() sock:close() end)
+        return nil, "端口被占用或绑定失败"
+    end
+
+    return sock
+end
+
+-- 启动 UDP 状态监听（接收 CapsWriter 处理状态）；端口被占时每 5 秒重试
+local function startStatusListener()
+    if statusSocket and not statusSocket:closed() then
+        return
+    end
+
+    local sock, err = bindStatusSocket()
+    if sock then
         statusSocket = sock
         print(string.format("[CapsWriter] UDP 状态监听已启动 | port=%d", M.config.statusPort))
-    else
-        print(string.format("[CapsWriter] UDP 状态监听启动失败: %s", tostring(sock)))
+        return
     end
+
+    print(string.format("[CapsWriter] UDP 状态监听启动失败: %s | port=%d | 每 5 秒重试",
+        tostring(err), M.config.statusPort))
+
+    if statusRetryTimer then return end
+    statusRetryTimer = hs.timer.doEvery(5, function()
+        local retried = bindStatusSocket()
+        if retried then
+            statusSocket = retried
+            statusRetryTimer:stop()
+            statusRetryTimer = nil
+            print(string.format("[CapsWriter] UDP 状态监听已启动（重试成功）| port=%d", M.config.statusPort))
+        end
+    end)
 end
 
 -- 停止 UDP 状态监听
 local function stopStatusListener()
+    if statusRetryTimer then
+        statusRetryTimer:stop()
+        statusRetryTimer = nil
+    end
     if statusSocket then
         pcall(function() statusSocket:close() end)
         statusSocket = nil
@@ -125,38 +169,79 @@ local function stopStatusListener()
 end
 
 -- ========== 客户端自动拉起 ==========
--- 判断客户端是否已就绪：UDP 6018 被占用 = 能接收 START/STOP
+-- 判断客户端是否真的能用：发 PING 等 PONG
+-- 不能只看端口是否被占用——进程卡死时端口还在监听，但不会回包，那才是最常见的故障
 local function checkClientReady(callback)
-    hs.task.new("/usr/sbin/lsof", function(exitCode, stdout)
-        local ready = false
-        if exitCode == 0 and stdout then
-            for line in stdout:gmatch("[^\r\n]+") do
-                -- 跳过自己那条 "本地端口->127.0.0.1:6018" 的连接记录，只看被监听的端口
-                if not line:find("->") and line:match("UDP%s+%S+:" .. M.config.port .. "%s*$") then
-                    ready = true
-                    break
-                end
-            end
+    local done = false
+    local probe = nil
+
+    local function finish(ready)
+        if done then return end
+        done = true
+        if probe then
+            pcall(function() probe:close() end)
         end
         callback(ready)
-    end, {"-nP", "-iUDP:" .. M.config.port}):start()
+    end
+
+    local ok = pcall(function()
+        probe = hs.socket.udp.new(function(data)
+            if data and tostring(data):gsub("%s+$", "") == "PONG" then
+                finish(true)
+            end
+        end)
+        -- 必须先 send 再 receive：先 receive 时 socket 还没绑上本地端口，收不到回包
+        probe:send("PING", M.config.host, M.config.port)
+        probe:receive()
+    end)
+
+    if not ok or not probe then
+        finish(false)
+        return
+    end
+
+    hs.timer.doAfter(M.config.pingTimeout, function()
+        finish(false)
+    end)
+end
+
+-- 杀掉占着控制端口、但已经不再响应 PING 的旧客户端
+-- 只针对 core_client.py，避免误伤（Hammerspoon 自己也连着这个端口，lsof 会列出它）
+local function killStaleClient()
+    local cmd = string.format(
+        'for pid in $(/usr/sbin/lsof -nP -t -iUDP:%d 2>/dev/null); do '
+        .. 'if /bin/ps -o command= -p "$pid" | /usr/bin/grep -q core_client; then '
+        .. '/bin/kill -9 "$pid" && echo "killed $pid"; fi; done',
+        M.config.port)
+    local output = hs.execute(cmd)
+    if output and output:find("killed") then
+        print("[CapsWriter] 已清理失去响应的旧客户端: " .. output:gsub("%s+$", ""))
+    end
 end
 
 -- 拉起客户端（逐出到 launchd 名下，配置重载或 Hammerspoon 退出后仍然存活）
--- 两个坑：
+-- 三个坑：
 --   1) hs.execute 会同步等待子进程的 stdout 管道关闭，所以必须用 (...) >> 日志 2>&1 < /dev/null &
 --      把后台子进程的标准流全部接管，否则子 shell 一直攥着管道，Hammerspoon 主线程会永久卡死
 --   2) 对 (...) 的重定向是在外层 shell 的工作目录下解析的，不受里面 cd 影响，所以日志必须用绝对路径
+--   3) 子进程会继承 Hammerspoon 的所有 FD，包括 6019 的状态监听 socket。Hammerspoon 重载时
+--      自己关了它，子进程却还攥着，新监听再也绑不上（hs.socket 绑定失败不报错），状态弹窗就没了。
+--      所以 exec 之前先把 3~63 号 FD 全部关掉
 local function spawnClient()
     local logPath = M.config.clientLog
     if logPath:sub(1, 1) ~= "/" then
         logPath = M.config.clientWorkDir .. "/" .. logPath
     end
 
+    local closeFDs = {}
+    for fd = 3, 63 do
+        closeFDs[#closeFDs + 1] = fd .. ">&-"
+    end
+
     local cmd = string.format(
-        '(cd "%s" && exec "%s" "%s") >> "%s" 2>&1 < /dev/null &',
-        M.config.clientWorkDir, M.config.clientPython,
-        M.config.clientScript, logPath)
+        '(cd "%s" && exec %s && exec "%s" "%s") >> "%s" 2>&1 < /dev/null &',
+        M.config.clientWorkDir, table.concat(closeFDs, " "),
+        M.config.clientPython, M.config.clientScript, logPath)
     hs.execute(cmd)
     print("[CapsWriter] 已拉起客户端: " .. M.config.clientScript .. " >> " .. logPath)
 end
@@ -168,6 +253,12 @@ local function ensureClientRunning(onResult)
         if onResult then onResult(ready, starting) end
     end
 
+    -- 已有启动流程在跑时不要再拉一遍（否则会并发起两个客户端，抢同一个端口）
+    if clientStarting then
+        report(false, true)
+        return
+    end
+
     checkClientReady(function(ready)
         if ready then
             report(true, false)
@@ -177,20 +268,31 @@ local function ensureClientRunning(onResult)
             report(false, false)
             return
         end
+        if clientStarting then          -- 探测的这段时间里可能已有别的调用开始了启动
+            report(false, true)
+            return
+        end
 
-        showAlert("⏳ CapsWriter 未运行，正在后台启动…", 2)
+        clientStarting = true
+
+        -- 先清掉占着端口但不回 PING 的僵尸进程，否则新客户端绑不上 6018
+        showAlert("⏳ CapsWriter 未运行或未响应，正在后台启动…", 2)
+        killStaleClient()
         spawnClient()
 
         local deadline = os.time() + M.config.startTimeout
-        local poller
-        poller = hs.timer.doEvery(1, function()
+        startPoller = hs.timer.doEvery(2, function()
             checkClientReady(function(ok)
                 if ok then
-                    poller:stop()
+                    startPoller:stop()
+                    startPoller = nil
+                    clientStarting = false
                     showAlert("✅ CapsWriter 已就绪，可以说话了", 2)
                     print("[CapsWriter] 客户端已就绪")
                 elseif os.time() > deadline then
-                    poller:stop()
+                    startPoller:stop()
+                    startPoller = nil
+                    clientStarting = false
                     showAlert("❌ CapsWriter 启动失败，请查看客户端日志", 3)
                     print("[CapsWriter] 客户端启动超时")
                 end
@@ -217,7 +319,8 @@ local function startRecording(source)
             end
             return
         end
-        sendUDP("START")
+        -- 发送失败就不要置 isRecording，否则后续按键会被前面的 if isRecording 吞掉
+        if not sendUDP("START") then return end
         isRecording = true
         showAlert("🎙️ 录音开始")
         print(string.format("[CapsWriter] 录音开始 | source=%s", source))
@@ -299,6 +402,11 @@ function M.stop()
     end
     if M.keyBinding then
         M.keyBinding:disable()
+    end
+    if startPoller then
+        startPoller:stop()
+        startPoller = nil
+        clientStarting = false
     end
     stopStatusListener()
     if udpClient then
