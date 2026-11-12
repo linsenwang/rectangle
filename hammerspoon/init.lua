@@ -9,6 +9,9 @@ package.path = hs.configdir .. "/lib/?.lua;" .. package.path
 -- 启用 Hammerspoon IPC，便于 hs 命令行调试
 pcall(function() require("hs.ipc") end)
 
+-- 控制台回滚历史上限（字符数，默认 100000）
+hs.console.maxOutputHistory(10000)
+
 -- 按依赖顺序加载模块
 require("config")          -- 配置、边距、工具函数
 require("alert")           -- 统一弹窗（需早于其它模块加载）
