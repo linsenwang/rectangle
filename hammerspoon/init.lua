@@ -24,6 +24,7 @@ require("stitch_fullscreen") -- 拼接全屏：按比例铺满屏幕（依赖 Ti
 require("auto_dock")       -- 自动停靠（依赖 EdgeDock）
 require("auto_close")      -- 应用窗口闲置自动关闭（不退出应用）
 require("display_layout")  -- 显示器布局记忆
+require("menu_bar_auto_hide")  -- 菜单栏自动隐藏：外接屏 In Full Screen Only / 内置屏 Always
 require("window_profile")  -- 窗口布局属性：屏幕变化后按属性重排
 require("capswriter")      -- CapsWriter 鼠标侧键触发录音（UDP 控制）
 require("notification_watch")  -- 通知监听：签到通知自动执行脚本 / 信息验证码自动复制并粘贴
