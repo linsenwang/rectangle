@@ -51,8 +51,26 @@ local function setAutoHide(hide)
     return false
 end
 
+-- 启动瞬间 hs.screen.allScreens() 可能还是空的（外接屏尚未枚举出来）。
+-- 这时既不能按内置屏把菜单栏设成 Always，也不能立刻下结论，等 init 里的补检。
+local function screenMode()
+    local screens = hs.screen.allScreens()
+    if #screens == 0 then
+        return nil
+    end
+    if #screens > 1 then
+        return true
+    end
+    return not AutoPolicy.isBuiltinScreen(screens[1])
+end
+
 local function apply(_, reason)
-    local external = AutoPolicy.hasExternalScreen()
+    local external = screenMode()
+    if external == nil then
+        log(reason .. "：屏幕列表尚未就绪，稍后补检")
+        return
+    end
+
     local hide = not external
     ensureFullscreenBarVisible()
 
@@ -79,6 +97,14 @@ MenuBarAutoHide.policy = policy
 
 function MenuBarAutoHide.init()
     policy:start()
+
+    -- 启动后补检：屏幕构成在 Hammerspoon 刚起来时可能不准（尤其合盖只接外接屏），
+    -- 而菜单栏设置写错后不会自己恢复。延迟重看几次，代价只有一次屏幕列表读取。
+    for _, delay in ipairs({2, 6, 12}) do
+        AutoPolicy.async.after(delay, function()
+            policy:refresh("启动补检")
+        end)
+    end
 end
 
 MenuBarAutoHide.init()
