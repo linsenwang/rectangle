@@ -36,6 +36,7 @@ end
 -- 按依赖顺序加载模块
 loadModule("config")          -- 配置、边距、工具函数
 loadModule("alert")           -- 统一弹窗（需早于其它模块加载）
+loadModule("auto_policy")     -- 检测→调整类工具的公共骨架（屏幕/合盖快照、去抖调度）
 loadModule("rectangle")       -- 窗口管理核心（半屏/全屏/居中/四角等）
 loadModule("mouse_snap")      -- 鼠标贴边吸附（拖动窗口到边缘）
 loadModule("layout")          -- 布局保存/恢复
@@ -46,6 +47,7 @@ loadModule("auto_dock")       -- 自动停靠（依赖 EdgeDock）
 loadModule("auto_close")      -- 应用窗口闲置自动关闭（不退出应用）
 loadModule("display_layout")  -- 显示器布局记忆
 loadModule("menu_bar_auto_hide")  -- 菜单栏自动隐藏：外接屏 In Full Screen Only / 内置屏 Always
+loadModule("night_shift")     -- Night Shift：外接屏 + 合盖时打开，用内置屏时关闭
 loadModule("window_profile")  -- 窗口布局属性：屏幕变化后按属性重排
 loadModule("capswriter")      -- CapsWriter 鼠标侧键触发录音（UDP 控制）
 loadModule("notification_watch")  -- 通知监听：签到通知自动执行脚本 / 信息验证码自动复制并粘贴

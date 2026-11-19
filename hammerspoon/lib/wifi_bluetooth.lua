@@ -141,8 +141,8 @@ end
 local pendingTimer
 
 local function checkAndEnable(label, stillConnected)
-    if pendingTimer then pendingTimer:stop() end
-    pendingTimer = hs.timer.doAfter(config.delay, function()
+    AutoPolicy.async.cancel(pendingTimer)
+    pendingTimer = AutoPolicy.async.after(config.delay, function()
         pendingTimer = nil
         if stillConnected() then
             enableBluetooth(label)

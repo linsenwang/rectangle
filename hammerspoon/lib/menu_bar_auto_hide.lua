@@ -7,32 +7,8 @@
 
 MenuBarAutoHide = MenuBarAutoHide or {}
 
-local config = {
-    debounce = 1.5,   -- 屏幕变化去抖（秒）
-    wakeDelay = 3,    -- 唤醒后等显示器重新识别
-}
-
 local function log(msg)
     print("[MenuBarAutoHide] " .. msg)
-end
-
--- 内置屏名称随机型/系统语言不同
-local builtinPatterns = { "built%-in", "color lcd", "retina display", "内建", "内置" }
-
-local function isBuiltinScreen(screen)
-    local name = string.lower(screen:name() or "")
-    for _, pattern in ipairs(builtinPatterns) do
-        if name:find(pattern) then return true end
-    end
-    return false
-end
-
--- 有外置屏（含合盖只用外接屏的情况）即视为外接模式
-local function hasExternalScreen()
-    local screens = hs.screen.allScreens()
-    if #screens > 1 then return true end
-    if #screens == 1 then return not isBuiltinScreen(screens[1]) end
-    return false
 end
 
 -- In Full Screen Only 对应 _HIHideMenuBar=0 + AppleMenuBarVisibleInFullscreen=0
@@ -75,10 +51,8 @@ local function setAutoHide(hide)
     return false
 end
 
-local function applyMode(reason)
-    if not MenuBarAutoHide.started then return end
-
-    local external = hasExternalScreen()
+local function apply(_, reason)
+    local external = AutoPolicy.hasExternalScreen()
     local hide = not external
     ensureFullscreenBarVisible()
 
@@ -94,42 +68,17 @@ local function applyMode(reason)
     end
 end
 
-local function scheduleApply(reason)
-    if not MenuBarAutoHide.changeTimer then return end
-    MenuBarAutoHide.pendingReason = reason
-    MenuBarAutoHide.changeTimer:start()
-end
+local policy = AutoPolicy.new({
+    name = "MenuBarAutoHide",
+    debounce = 1.5,   -- 屏幕变化去抖（秒）
+    wakeDelay = 3,    -- 唤醒后等显示器重新识别
+    apply = apply,
+})
 
-local function onWake()
-    if MenuBarAutoHide.wakeTimer then MenuBarAutoHide.wakeTimer:stop() end
-    MenuBarAutoHide.wakeTimer = hs.timer.doAfter(config.wakeDelay, function()
-        applyMode("系统唤醒")
-    end)
-end
+MenuBarAutoHide.policy = policy
 
 function MenuBarAutoHide.init()
-    if MenuBarAutoHide.screenWatcher then MenuBarAutoHide.screenWatcher:stop() end
-    if MenuBarAutoHide.caffeinateWatcher then MenuBarAutoHide.caffeinateWatcher:stop() end
-
-    MenuBarAutoHide.changeTimer = hs.timer.delayed.new(config.debounce, function()
-        applyMode(MenuBarAutoHide.pendingReason or "屏幕变化")
-    end)
-
-    MenuBarAutoHide.started = true
-
-    MenuBarAutoHide.screenWatcher = hs.screen.watcher.new(function()
-        scheduleApply("屏幕变化")
-    end)
-    MenuBarAutoHide.screenWatcher:start()
-
-    MenuBarAutoHide.caffeinateWatcher = hs.caffeinate.watcher.new(function(eventType)
-        if eventType == hs.caffeinate.watcher.systemDidWake then
-            onWake()
-        end
-    end)
-    MenuBarAutoHide.caffeinateWatcher:start()
-
-    applyMode("启动")
+    policy:start()
 end
 
 MenuBarAutoHide.init()

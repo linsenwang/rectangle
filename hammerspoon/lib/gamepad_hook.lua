@@ -56,21 +56,10 @@ local function popup(message)
 end
 
 -- ============================================
--- 异步执行与定时器（引用必须保住，否则会被 GC 回收）
+-- 异步执行与定时器：统一走 AutoPolicy.async（内部保留引用，避免被 GC 回收）
 -- ============================================
 
-local tasks = {}
-local timers = {}
-
-local function run(launchPath, args, cb)
-    local task
-    task = hs.task.new(launchPath, function(code, out, err)
-        tasks[task] = nil
-        cb(code or -1, out or "", err or "")
-    end, args)
-    tasks[task] = true
-    task:start()
-end
+local run, after, cancel = AutoPolicy.async.run, AutoPolicy.async.after, AutoPolicy.async.cancel
 
 -- pm2 是 node 脚本，必须带上 Homebrew PATH 才能找到 node；
 -- 同时 pm2 在 stdin 是未关闭的管道时会一直等 EOF，不退出，
@@ -82,22 +71,6 @@ local function runPm2(args, cb)
         full[#full + 1] = arg
     end
     run("/bin/sh", full, cb)
-end
-
-local function after(seconds, fn)
-    local timer
-    timer = hs.timer.doAfter(seconds, function()
-        timers[timer] = nil
-        fn()
-    end)
-    timers[timer] = true
-    return timer
-end
-
-local function cancel(timer)
-    if not timer then return end
-    timer:stop()
-    timers[timer] = nil
 end
 
 -- ============================================

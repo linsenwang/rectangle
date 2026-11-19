@@ -35,31 +35,10 @@ local function log(msg)
 end
 
 -- ============================================
--- 异步执行与定时器（引用必须保住，否则会被 GC 回收）
+-- 异步执行与定时器：统一走 AutoPolicy.async（内部保留引用，避免被 GC 回收）
 -- ============================================
 
-local tasks = {}
-local timers = {}
-
-local function run(launchPath, args, cb)
-    local task
-    task = hs.task.new(launchPath, function(code, out, err)
-        tasks[task] = nil
-        cb(code or -1, out or "", err or "")
-    end, args)
-    tasks[task] = true
-    task:start()
-end
-
-local function after(seconds, fn)
-    local timer
-    timer = hs.timer.doAfter(seconds, function()
-        timers[timer] = nil
-        fn()
-    end)
-    timers[timer] = true
-    return timer
-end
+local run, after = AutoPolicy.async.run, AutoPolicy.async.after
 
 local function findDevice()
     local ok, devices = pcall(function() return hs.audiodevice.allOutputDevices() end)

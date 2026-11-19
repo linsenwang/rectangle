@@ -1,0 +1,2 @@
+# clang 编译产物，由 lib/night_shift.lua 首次加载时自动生成
+bin/nightshift
