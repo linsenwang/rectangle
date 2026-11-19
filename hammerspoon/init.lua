@@ -56,6 +56,7 @@ loadModule("iloud_fix")       -- iLoud 首次连接音量过小时自动断开�
 loadModule("gamepad_hook")    -- 蓝牙连上手柄时自动 pm2 启动 xbox
 loadModule("keybindings")     -- 快捷键帮助面板 (Ctrl+Option+/)
 loadModule("ocr_shot")        -- 截图 OCR 成 Markdown(LaTeX) (⇧⌘3)
+loadModule("ordered_paste")   -- 剪贴板多图按顺序逐张粘贴 (⌃⌥⌘P)
 loadModule("keyboard_lock")   -- 键盘锁：Ctrl+L 启停锁定
 
 for _, failure in ipairs(loadFailures) do

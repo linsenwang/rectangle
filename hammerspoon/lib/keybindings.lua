@@ -120,6 +120,12 @@ local bindings = {
         }
     },
     {
+        title = "剪贴板",
+        items = {
+            { "⌃⌥⌘ P",     "按顺序逐张粘贴剪贴板图片（再按一次取消）" },
+        }
+    },
+    {
         title = "CapsWriter",
         items = {
             { "⇧→",        "按住录音，松开停止" },
